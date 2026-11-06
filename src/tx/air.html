@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nTs-AIR Transmitter</title>
+<style>
+:root{--bg:#0e1013;--card:#171a1f;--line:#262b33;--tx:#e6e9ee;--mut:#8a93a0;--acc:#2bd46b;--red:#ff3b3b;--blue:#3aa0ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1200px;margin:auto;padding:16px;display:grid;grid-template-columns:minmax(320px,460px) 1fr;gap:16px}
+@media(max-width:860px){.wrap{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 10px}
+/* ---- device ---- */
+.dev{background:linear-gradient(160deg,#2a2d31,#15171a);border-radius:22px;padding:18px 18px 14px;box-shadow:0 10px 30px #0008,inset 0 1px 0 #ffffff14;position:relative}
+.dev .vents{height:10px;margin:0 30px 14px;background:repeating-linear-gradient(90deg,#0a0b0c 0 10px,transparent 10px 15px);border-radius:3px;opacity:.8}
+.face{display:flex;gap:12px;align-items:stretch}
+.brand{writing-mode:vertical-rl;transform:rotate(180deg);color:#9aa1a9;font-weight:700;letter-spacing:.15em;font-size:13px;border-left:2px solid #c0392b;padding-left:4px}
+.lcd{flex:1;aspect-ratio:16/10.5;background:#000;border-radius:6px;border:3px solid #050505;position:relative;overflow:hidden;box-shadow:0 0 0 1px #333}
+.lcd img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.85}
+.lcd .nopv{position:absolute;inset:0;background:linear-gradient(135deg,#0b2a4a,#071322)}
+.lcd .meter{position:absolute;left:0;right:0;top:0;height:6px;display:flex;gap:2px;padding:1px 4px}
+.lcd .meter i{flex:1;background:#2bd46b33}.lcd .meter i.on{background:#2bd46b}.lcd .meter i.on.y{background:#f1c40f}.lcd .meter i.on.r{background:var(--red)}
+.lcd .br{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);background:#3a6fa8e6;border:2px solid #cfe3ff;padding:2px 12px;border-radius:4px;font-weight:800;font-size:clamp(22px,6vw,34px);white-space:nowrap;text-shadow:0 1px 2px #0008}
+.lcd .br small{font-size:.6em}
+.lcd .tm{position:absolute;left:50%;top:56%;transform:translateX(-50%);background:#000a;padding:1px 10px 1px 24px;border-radius:10px;font:700 15px ui-monospace,monospace}
+.lcd .tm:before{content:"";position:absolute;left:8px;top:50%;width:10px;height:10px;margin-top:-5px;border-radius:50%;background:#777}
+.lcd.live .tm:before{background:var(--red);animation:bl 1s infinite}.lcd.conn .tm:before{background:#f39c12;animation:bl .4s infinite}
+@keyframes bl{50%{opacity:.2}}
+.lcd .st{position:absolute;left:0;right:0;bottom:0;height:22%;background:#1f3550f0;display:flex;align-items:center;gap:8px;padding:0 8px}
+.lcd .st .ic{display:flex;align-items:flex-end;gap:3px;font-size:11px;color:#cfe3ff}
+.lcd .st .ic svg{width:18px;height:18px;fill:#cfe3ff;opacity:.35}.lcd .st .ic.on svg{opacity:1}
+.lcd .st .bar{flex:1;height:8px;background:#0006;border-radius:4px;overflow:hidden}.lcd .st .bar i{display:block;height:100%;background:var(--acc);width:0;transition:width .5s}
+.lcd .state{position:absolute;right:6px;top:10px;font:700 10px ui-monospace;background:#000a;padding:1px 5px;border-radius:3px}
+.side{display:flex;flex-direction:column;gap:8px;justify-content:center;padding:6px 2px}
+.led{width:12px;height:12px;border-radius:50%;background:#1c3324;box-shadow:inset 0 0 2px #000}
+.led.g{background:var(--acc);box-shadow:0 0 8px var(--acc)}.led.w{background:#fff;box-shadow:0 0 8px #fff}.led.r{background:var(--red);box-shadow:0 0 8px var(--red)}
+.ctrl{display:flex;justify-content:center;gap:16px;margin-top:14px;align-items:center}
+.btn{width:46px;height:46px;border-radius:12px;background:linear-gradient(#2b2e33,#111);border:1px solid #000;color:#ccd;font-size:18px;cursor:pointer;box-shadow:0 3px 0 #000}
+.knob{width:70px;height:70px;border-radius:50%;cursor:pointer;border:2px solid #000;
+ background:repeating-conic-gradient(#25282c 0 6deg,#111 6deg 12deg);box-shadow:0 4px 0 #000,inset 0 0 0 10px #1a1c1f;color:#fff;font-weight:800;font-size:12px}
+.knob.live{box-shadow:0 4px 0 #000,inset 0 0 0 10px #1a1c1f,0 0 16px var(--red)}
+.btn:active,.knob:active{transform:translateY(2px);box-shadow:0 1px 0 #000}
+.hint{text-align:center;color:var(--mut);font-size:12px;margin-top:8px}
+/* ---- right ---- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+label{display:block;font-size:12px;color:var(--mut)}
+input,select{width:100%;margin-top:3px;background:#0e1115;border:1px solid var(--line);color:var(--tx);padding:7px 8px;border-radius:7px}
+button.p{background:var(--blue);border:0;color:#fff;padding:9px 16px;border-radius:8px;font-weight:600;cursor:pointer}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}th{color:var(--mut);font-weight:500}
+.lb{height:6px;background:#0006;border-radius:3px;overflow:hidden;min-width:60px}.lb i{display:block;height:100%;background:var(--acc)}
+.tag{font-size:11px;padding:1px 6px;border-radius:9px;background:#263040}
+pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:auto;font-size:11px;margin:0;white-space:pre-wrap}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:16px}
+.sw{width:auto}
+</style></head><body>
+<div class="wrap">
+ <div class="stack">
+  <div class="dev">
+   <div class="vents"></div>
+   <div class="face">
+    <div class="brand">nTs-AIR</div>
+    <div class="lcd" id="lcd">
+     <div class="nopv" id="nopv"></div><img id="pv" alt="" style="display:none">
+     <div class="meter" id="meter"></div>
+     <div class="state" id="state">IDLE</div>
+     <div class="br" id="br">0.00 <small>Mbps</small></div>
+     <div class="tm" id="tm">00:00:00</div>
+     <div class="st"><div id="icons" class="row" style="gap:8px"></div><div class="bar"><i id="fill"></i></div></div>
+    </div>
+    <div class="side"><div class="led" id="l1"></div><div class="led" id="l2"></div><div class="led" id="l3"></div></div>
+   </div>
+   <div class="ctrl">
+    <button class="btn" onclick="br(-500)" title="-0.5 Mbps">◀</button>
+    <button class="knob" id="knob" onclick="toggle()">LIVE</button>
+    <button class="btn" onclick="br(500)" title="+0.5 Mbps">▶</button>
+   </div>
+   <div class="hint">Buton central = START/STOP · ◀ ▶ = bitrate maxim <b id="maxb"></b></div>
+  </div>
+  <div class="card"><h2>Legături (bonding)</h2>
+   <table><thead><tr><th></th><th>Interfață</th><th>IP</th><th>TX</th><th></th></tr></thead><tbody id="links"></tbody></table>
+  </div>
+ </div>
+ <div class="stack">
+  <div class="card"><h2>Destinație (receiver)</h2><div class="grid">
+   <label>Server srtla_rec<input id="rx_host"></label>
+   <label>Port UDP<input id="rx_port" type="number"></label>
+   <label>Stream ID<input id="streamid"></label>
+   <label>Latență SRT (ms)<input id="latency" type="number"></label>
+  </div></div>
+  <div class="card"><h2>Encoder</h2><div class="grid">
+   <label>Sursă video<select id="video_src">
+     <option value="test">Test pattern</option><option value="mjpeg">Captură HDMI USB (MJPEG)</option>
+     <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option></select></label>
+   <label>Dispozitiv video<select id="video_dev"></select></label>
+   <label>Encoder<select id="encoder"></select></label>
+   <label>Rezoluție<select id="res"><option>1920x1080</option><option>1280x720</option><option>3840x2160</option><option>720x576</option></select></label>
+   <label>FPS<select id="fps"><option>25</option><option>30</option><option>50</option><option>60</option></select></label>
+   <label>GOP (sec)<input id="gop_sec" type="number"></label>
+   <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
+   <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
+   <label>Sursă audio<select id="audio_src"><option value="alsa">ALSA (placă captură)</option><option value="pulse">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label>Dispozitiv audio<select id="audio_dev"></select></label>
+   <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
+   <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
+  </div>
+  <div class="row" style="margin-top:12px">
+   <label class="row" style="color:var(--tx)"><input type="checkbox" id="autostart" class="sw"> Pornire automată la boot</label>
+   <label>Parolă panel nouă<input id="web_pass" type="password" placeholder="(neschimbată)"></label>
+   <button class="p" onclick="save()">Salvează</button><span id="msg" style="color:var(--acc)"></span>
+  </div></div>
+  <div class="card"><h2>Jurnal</h2><pre id="log"></pre></div>
+ </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const ICON={eth:'<svg viewBox="0 0 24 24"><path d="M4 9h16v9h-3v-3h-2v3h-2v-3h-2v3H9v-3H7v3H4z"/></svg>',
+ wifi:'<svg viewBox="0 0 24 24"><path d="M12 18a2 2 0 110 4 2 2 0 010-4zm-4.2-2.8a6 6 0 018.4 0l-1.4 1.4a4 4 0 00-5.6 0zM4.9 12.4a10 10 0 0114.2 0l-1.4 1.4a8 8 0 00-11.4 0zM2 9.5a14 14 0 0120 0L20.6 11A12 12 0 003.4 11z"/></svg>',
+ cell:'<svg viewBox="0 0 24 24"><path d="M3 20h3v-4H3zm5 0h3v-8H8zm5 0h3V8h-3zm5 0h3V3h-3z"/></svg>'};
+for(let i=0;i<24;i++){const e=document.createElement('i');e.className=i>19?'r':i>15?'y':'';$('meter').appendChild(e)}
+let S={},C={};
+async function api(p,b){const r=await fetch(p,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:{});return r.headers.get('content-type').includes('json')?r.json():r.text()}
+const fmt=s=>[s/3600|0,(s/60|0)%60,s%60].map(x=>String(x).padStart(2,'0')).join(':');
+function toggle(){api(S.live?'/api/stop':'/api/start',{}).then(tick)}
+function br(d){api('/api/bitrate',{delta:d}).then(r=>{$('max_kbps').value=r.max_kbps;tick()})}
+function link(i,on){api('/api/link',{if:i,on}).then(tick)}
+async function tick(){
+ try{S=await api('/api/status')}catch(e){return}
+ const lcd=$('lcd');lcd.className='lcd'+(S.live?(S.state=='LIVE'?' live':' conn'):'');
+ $('br').innerHTML=S.total_mbps.toFixed(2)+' <small>Mbps</small>';$('tm').textContent=fmt(S.uptime);
+ $('state').textContent=S.state;$('maxb').textContent=(S.max_kbps/1000).toFixed(1)+' Mbps';
+ $('knob').textContent=S.live?'STOP':'LIVE';$('knob').classList.toggle('live',S.live);
+ $('fill').style.width=Math.min(100,S.total_mbps/(S.max_kbps/1000)*100)+'%';
+ const lv=Math.round(Math.min(1,S.total_mbps/(S.max_kbps/1000))*24);[...$('meter').children].forEach((e,i)=>e.classList.toggle('on',S.live&&i<lv));
+ const kinds={};S.links.forEach(l=>{if(l.on)kinds[l.kind]=1});
+ $('icons').innerHTML=['eth','wifi','cell'].map(k=>`<span class="ic ${kinds[k]?'on':''}">${ICON[k]}</span>`).join('');
+ $('l1').className='led g';$('l2').className='led '+(S.links.some(l=>l.on)?'g':'');$('l3').className='led '+(S.live?(S.state=='LIVE'?'r':'w'):'');
+ if(S.has_preview){$('pv').src='/preview.jpg?'+Date.now();$('pv').style.display='';$('nopv').style.display='none'}else{$('pv').style.display='none';$('nopv').style.display=''}
+ const mx=Math.max(1,...S.links.map(l=>l.tx));
+ $('links').innerHTML=S.links.map(l=>`<tr><td><input type="checkbox" class="sw" ${l.on?'checked':''} onchange="link('${l.if}',this.checked)"></td>
+  <td>${l.if} <span class="tag">${{eth:'Ethernet',wifi:'WiFi',cell:'4G/5G'}[l.kind]}</span></td><td>${l.ip}</td>
+  <td>${l.tx.toFixed(2)} Mbps</td><td><div class="lb"><i style="width:${l.tx/mx*100}%"></i></div></td></tr>`).join('')||'<tr><td colspan=5>Nicio interfață cu IP</td></tr>';
+ const lg=$('log'),atB=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-5;lg.textContent=S.log.join('\n');if(atB)lg.scrollTop=lg.scrollHeight;
+}
+async function load(){
+ const [c,d]=await Promise.all([api('/api/config'),api('/api/devices')]);C=c;
+ $('video_dev').innerHTML=(d.video.length?d.video:[{dev:'/dev/video0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
+ $('audio_dev').innerHTML=(d.audio.length?d.audio:[{dev:'hw:1,0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
+ $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+ ['rx_host','rx_port','streamid','latency','video_src','video_dev','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
+ $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;
+}
+async function save(){
+ const b={};['rx_host','streamid','video_src','video_dev','encoder','audio_src','audio_dev','web_pass'].forEach(k=>b[k]=$(k).value);
+ ['rx_port','latency','fps','gop_sec','min_kbps','max_kbps','audio_kbps','av_delay'].forEach(k=>b[k]=+$(k).value);
+ const [w,h]=$('res').value.split('x');b.width=+w;b.height=+h;b.autostart=$('autostart').checked;
+ const r=await api('/api/config',b);$('msg').textContent=r.restarted?'Salvat – transmisia a repornit':'Salvat';setTimeout(()=>$('msg').textContent='',3000);$('web_pass').value='';
+}
+load();tick();setInterval(tick,1000);
+</script></body></html>

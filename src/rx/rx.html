@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nTs-AIR Receiver</title>
+<style>
+:root{--bg:#0d0f12;--card:#161a20;--line:#252b34;--tx:#e7eaef;--mut:#8a94a3;--acc:#2bd46b;--red:#ff4747;--yel:#f5b83d;--blue:#3aa0ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:18px;padding:12px 18px;border-bottom:1px solid var(--line);background:#11141a;position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.logo{font-weight:800;letter-spacing:.06em}.logo b{color:var(--red)}
+.kpi{display:flex;gap:18px;flex-wrap:wrap}.kpi div{font-size:12px;color:var(--mut)}.kpi b{display:block;font-size:17px;color:var(--tx)}
+.sp{flex:1}
+button{background:#232a34;border:1px solid #2f3846;color:var(--tx);padding:7px 12px;border-radius:8px;cursor:pointer;font:inherit}
+button:hover{background:#2b3440}button.p{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+button.d{color:#ff9a9a}
+main{padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:16px}
+@media(max-width:460px){main{grid-template-columns:1fr;padding:10px}}
+.ch{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.ch.on{border-color:#1f5a37}
+.pv{position:relative;aspect-ratio:16/9;background:#05070a;display:flex;align-items:center;justify-content:center;color:#3c4654;font-weight:700;letter-spacing:.1em}
+.pv img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.pv span{z-index:2;color:var(--tx)}
+.pv .badge.wait{color:var(--yel)}
+.badge{position:absolute;left:10px;top:10px;padding:3px 9px;border-radius:5px;font-size:12px;font-weight:800;background:#333}
+.badge.on{background:var(--red);animation:pl 2s infinite}.badge.wait{background:#5a4a1b;color:var(--yel)}
+@keyframes pl{50%{opacity:.75}}
+.pv .br{position:absolute;right:10px;bottom:10px;background:#000b;padding:2px 10px;border-radius:6px;font-weight:800;font-size:22px}
+.pv .br small{font-size:12px;color:var(--mut)}
+.pv .up{position:absolute;right:10px;top:10px;background:#000b;padding:2px 8px;border-radius:5px;font:700 13px ui-monospace,monospace}
+.pv .inf{position:absolute;left:10px;bottom:10px;background:#000b;padding:2px 8px;border-radius:5px;font-size:11px}
+.body{padding:12px;display:flex;flex-direction:column;gap:10px}
+.hd{display:flex;align-items:center;gap:8px}.hd h3{margin:0;font-size:16px}.hd .port{color:var(--mut);font-size:12px}
+canvas{width:100%;height:44px;display:block}
+.met{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.met div{background:#0f1217;border-radius:8px;padding:5px 7px;font-size:11px;color:var(--mut)}.met b{display:block;color:var(--tx);font-size:14px}
+.met .bad b{color:var(--yel)}.met .vbad b{color:var(--red)}
+h4{margin:2px 0 0;font-size:11px;letter-spacing:.08em;color:var(--mut);text-transform:uppercase;font-weight:600}
+.lk{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;font-size:12px}
+.lk .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lk .op{font-size:10px;padding:0 6px;border-radius:8px;background:#263040;margin-left:4px}
+.lk .bar{grid-column:1/3;height:5px;background:#0006;border-radius:3px;overflow:hidden;margin-bottom:4px}.lk .bar i{display:block;height:100%;background:var(--acc)}
+.op.Orange{background:#5a3412;color:#ffb067}.op.Vodafone{background:#5a1616;color:#ff8d8d}.op.Digi{background:#14335a;color:#8cc4ff}.op.Telekom{background:#4a1640;color:#ff8ce0}
+.outs{font-size:12px;display:flex;flex-direction:column;gap:3px}
+.outs div{display:flex;gap:6px;align-items:center;word-break:break-all}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--acc);flex:none}.dot.x{background:var(--red)}
+.outs a{color:var(--blue);text-decoration:none;cursor:pointer}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+pre{background:#090b0e;border-radius:8px;padding:8px;max-height:180px;overflow:auto;font-size:11px;margin:0;white-space:pre-wrap;display:none}
+pre.show{display:block}
+.mut{color:var(--mut);font-size:12px}
+.empty{grid-column:1/-1;text-align:center;padding:60px 10px;color:var(--mut)}
+dialog{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(520px,94vw)}
+dialog::backdrop{background:#000a}
+dialog label{display:block;font-size:12px;color:var(--mut);margin-top:10px}
+dialog input,dialog textarea{width:100%;margin-top:3px;background:#0e1115;border:1px solid var(--line);color:var(--tx);padding:8px;border-radius:7px;font:inherit}
+dialog textarea{font:12px ui-monospace,monospace;height:110px}
+.row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.err{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
+.help{font-size:11px;color:var(--mut);margin-top:4px;line-height:1.5}
+</style></head><body>
+<header>
+ <div class="logo">nTs-AIR <b>RX</b></div>
+ <div class="kpi">
+  <div>ON AIR<b id="k_on">0/0</b></div><div>Total intrare<b id="k_tot">0 Mbps</b></div>
+  <div>Load<b id="k_load">-</b></div><div>Server<b id="k_host">-</b></div>
+ </div>
+ <div class="sp"></div>
+ <button onclick="pw()">Parolă</button>
+ <button class="p" onclick="edit()">+ Canal</button>
+</header>
+<main id="grid"></main>
+
+<dialog id="dlg"><form method="dialog" onsubmit="return false">
+ <h3 id="dt" style="margin:0">Canal nou</h3>
+ <label>Nume (folosit în link: /live/NUME.ts)<input id="f_name" placeholder="cam1"></label>
+ <div class="row2">
+  <label>Port SRTLA (UDP)<input id="f_port" type="number" value="5000"></label>
+  <label>Latență (ms)<input id="f_lat" type="number" value="2000"></label>
+  <label>lossmaxttl<input id="f_ttl" type="number" value="40"></label>
+ </div>
+ <label>Ieșiri (câte una pe linie, max 8)<textarea id="f_out" placeholder="udp://127.0.0.1:5010&#10;udp://239.1.1.10:1234?ttl=4&#10;srt://0.0.0.0:6001?mode=listener&#10;rtmp://localhost/live/cam1"></textarea></label>
+ <div class="help">HTTP-TS e mereu activ: <b>http://server:PORT/live/NUME.ts</b> și <b>/NUME</b>.<br>
+  udp:// unicast/multicast (opțional ?ttl=4&amp;localaddr=IP) · srt:// listener sau caller · rtmp:// (doar H.264)</div>
+ <label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" id="f_en" style="width:auto" checked> Activ</label>
+ <div class="err" id="ferr"></div>
+ <div class="acts" style="justify-content:flex-end"><button onclick="dlg.close()">Anulează</button><button class="p" onclick="saveCh()">Salvează</button></div>
+</form></dialog>
+
+<script>
+const $=id=>document.getElementById(id);let S={channels:[]},editing=null,openLogs={};
+const dlg=$('dlg');
+const fmt=s=>[s/3600|0,(s/60|0)%60,s%60].map(x=>String(x).padStart(2,'0')).join(':');
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(p,b){const r=await fetch(p,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:{});return r.json()}
+function spark(cv,h,mx){const d=window.devicePixelRatio||1,w=cv.clientWidth,ht=cv.clientHeight;cv.width=w*d;cv.height=ht*d;const x=cv.getContext('2d');x.scale(d,d);
+ if(!h.length)return;const m=Math.max(mx||1,...h)*1.15;x.beginPath();h.forEach((v,i)=>{const px=w-(h.length-1-i)*(w/119),py=ht-v/m*ht;i?x.lineTo(px,py):x.moveTo(px,py)});
+ x.strokeStyle='#2bd46b';x.lineWidth=1.5;x.stroke();x.lineTo(w,ht);x.lineTo(w-(h.length-1)*(w/119),ht);x.closePath();x.fillStyle='#2bd46b22';x.fill()}
+function card(c){
+ const on=c.state=='ON AIR',wait=c.state=='ASTEAPTA';const base=location.origin;
+ const lmax=Math.max(.01,...c.links.map(l=>l.mbps));const tot=c.links.reduce((a,l)=>a+l.mbps,0)||1;
+ const lossCls=c.lost10>200?'vbad':c.lost10>20?'bad':'',dropCls=c.drop10>0?'vbad':'';
+ return `<div class="ch ${on?'on':''}" id="ch${c.id}">
+ <div class="pv">${c.thumb?`<img src="/thumb/${c.id}.jpg?${Math.floor(Date.now()/10000)}">`:(on?'':'NO SIGNAL')}
+  <span class="badge ${on?'on':wait?'wait':''}">${c.state}</span>
+  ${on?`<span class="up">${fmt(c.uptime)}</span>`:''}
+  ${c.info.video?`<span class="inf">${esc(c.info.video)}${c.info.audio?' · '+esc(c.info.audio):''}</span>`:''}
+  <span class="br">${c.mbps.toFixed(2)} <small>Mbps</small></span></div>
+ <div class="body">
+  <div class="hd"><h3>${esc(c.name)}</h3><span class="port">UDP ${c.srtla_port} · latență ${c.latency} ms</span></div>
+  <canvas id="cv${c.id}"></canvas>
+  <div class="met">
+   <div>Legături<b>${c.links.length}</b></div><div>RTT<b>${c.rtt?c.rtt+' ms':'-'}</b></div>
+   <div class="${lossCls}">Pierdute/10s<b>${c.lost10}</b></div><div class="${dropCls}">Drop/10s<b>${c.drop10}</b></div>
+  </div>
+  <h4>Legături bonded</h4>
+  <div class="lk">${c.links.length?c.links.map(l=>`<span class="n" title="${esc(l.host)}">${esc(l.ip)}:${l.port}${l.op?`<span class="op ${l.op}">${l.op}</span>`:''}</span>
+   <span>${l.mbps.toFixed(2)} Mbps · ${Math.round(l.mbps/tot*100)}%</span><div class="bar"><i style="width:${l.mbps/lmax*100}%"></i></div>`).join(''):'<span class="mut">niciun transmițător conectat</span>'}</div>
+  <h4>Ieșiri</h4>
+  <div class="outs">
+   <div><span class="dot"></span><a onclick="cp('${base}/live/${esc(c.name)}.ts')">${base}/live/${esc(c.name)}.ts</a></div>
+   ${c.out_status.map(o=>`<div><span class="dot ${o.ok?'':'x'}"></span>${esc(o.url)}</div>`).join('')}
+   ${c.clients.length?`<div class="mut">Clienți HTTP: ${c.clients.map(k=>esc(k.ip)+' ('+fmt(k.since)+')').join(', ')}</div>`:''}
+  </div>
+  <div class="acts"><button onclick="edit(${c.id})">Editează</button><button onclick="act(${c.id},'restart')">Restart</button>
+   <button onclick="tl(${c.id})">Jurnal</button><button class="d" onclick="del(${c.id},'${esc(c.name)}')">Șterge</button></div>
+  <pre id="lg${c.id}" class="${openLogs[c.id]?'show':''}">${esc(c.log.join('\n'))}</pre>
+ </div></div>`}
+async function tick(){
+ try{S=await api('/api/status')}catch(e){return}
+ $('k_on').textContent=S.onair+'/'+S.channels.length;$('k_tot').textContent=S.total_mbps.toFixed(2)+' Mbps';
+ $('k_load').textContent=S.load+' / '+S.ncpu+' CPU';$('k_host').textContent=S.host;
+ if(dlg.open)return;
+ const sc=window.scrollY;
+ $('grid').innerHTML=S.channels.length?S.channels.map(card).join(''):'<div class="empty">Niciun canal. Apasă <b>+ Canal</b> pentru a adăuga un receptor pentru transmițător.</div>';
+ S.channels.forEach(c=>{spark($('cv'+c.id),c.hist);const l=$('lg'+c.id);if(l)l.scrollTop=l.scrollHeight});
+ window.scrollTo(0,sc);
+}
+function tl(id){openLogs[id]=!openLogs[id];$('lg'+id).classList.toggle('show')}
+function cp(t){navigator.clipboard&&navigator.clipboard.writeText(t);}
+function edit(id){
+ editing=id||null;const c=S.channels.find(x=>x.id==id);$('ferr').textContent='';
+ $('dt').textContent=c?'Editează '+c.name:'Canal nou';
+ const used=S.channels.map(x=>x.srtla_port);let np=5000;while(used.includes(np))np++;
+ $('f_name').value=c?c.name:'cam'+(S.channels.length+1);$('f_port').value=c?c.srtla_port:np;
+ $('f_lat').value=c?c.latency:2000;$('f_ttl').value=c?c.lossmaxttl:40;$('f_out').value=c?c.outputs.join('\n'):'';$('f_en').checked=c?c.enabled:true;
+ dlg.showModal()}
+async function saveCh(){
+ const b={name:$('f_name').value.trim(),srtla_port:+$('f_port').value,latency:+$('f_lat').value,lossmaxttl:+$('f_ttl').value,outputs:$('f_out').value,enabled:$('f_en').checked};
+ const r=await api(editing?`/api/channel/${editing}/update`:'/api/channel',b);
+ if(r.err){$('ferr').textContent=r.err;return}dlg.close();tick()}
+async function act(id,a){await api(`/api/channel/${id}/${a}`,{});tick()}
+function del(id,n){if(confirm('Ștergi canalul '+n+'?'))act(id,'delete')}
+async function pw(){const p=prompt('Parolă nouă panou:');if(!p)return;const r=await api('/api/password',{pass:p});alert(r.err||'Parola schimbată. Reautentifică-te.')}
+tick();setInterval(tick,1000);
+</script></body></html>
