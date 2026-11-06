@@ -26,3 +26,19 @@ X
 } > nts-air.sh
 chmod +x nts-air.sh
 bash -n nts-air.sh && echo "nts-air.sh OK ($(wc -l < nts-air.sh) linii)"
+
+# ---- Windows: nts-air-win.ps1 (UTF-8 cu BOM, pentru PowerShell 5.1)
+embps(){ # embps <nume> <fisier>
+  echo "  Put \"\$Dir\\$1\" @'"; cat "$2"; echo "'@"; }
+{
+  printf '\xef\xbb\xbf'
+  sed -n '1,/^#@@SOURCES@@$/p' win/installer.ps1 | sed '$d'
+  echo 'function Write-Sources {'
+  embps 'air.py'                 src/tx/air.py
+  embps 'air.html'               src/tx/air.html
+  embps 'src\belacoder_port.c'   win/src/belacoder_port.c
+  embps 'src\srtla_send_port.c'  win/src/srtla_send_port.c
+  echo '}'
+  sed -n '/^#@@SOURCES@@$/,$p' win/installer.ps1 | sed '1d'
+} > nts-air-win.ps1
+echo "nts-air-win.ps1 OK ($(wc -l < nts-air-win.ps1) linii)"

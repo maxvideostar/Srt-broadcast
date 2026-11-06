@@ -98,7 +98,7 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>GOP (sec)<input id="gop_sec" type="number"></label>
    <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
    <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
-   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="alsa">ALSA (placă captură)</option><option value="pulse">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
    <label>Dispozitiv audio<select id="audio_dev"></select></label>
    <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
    <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
@@ -143,8 +143,12 @@ async function tick(){
 }
 async function load(){
  const [c,d]=await Promise.all([api('/api/config'),api('/api/devices')]);C=c;
- $('video_dev').innerHTML=(d.video.length?d.video:[{dev:'/dev/video0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
- $('audio_dev').innerHTML=(d.audio.length?d.audio:[{dev:'hw:1,0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
+ const W=d.platform=='win',E=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+ document.querySelectorAll(W?'.lnx':'.win').forEach(o=>o.remove());
+ const vl=W?[{dev:'',name:'Primul dispozitiv'}].concat(d.video):(d.video.length?d.video:[{dev:'/dev/video0',name:'(niciunul detectat)'}]);
+ const al=W?[{dev:'',name:'Implicit Windows'}].concat(d.audio):(d.audio.length?d.audio:[{dev:'hw:1,0',name:'(niciunul detectat)'}]);
+ $('video_dev').innerHTML=vl.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
+ $('audio_dev').innerHTML=al.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
  ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
  $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;

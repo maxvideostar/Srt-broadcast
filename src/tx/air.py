@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
 # nTs-AIR transmitter - panel web + control belacoder/srtla_send + source routing
+# Ruleaza pe Linux (Ubuntu) si Windows (MSYS2 UCRT64)
 import json, os, re, signal, subprocess, threading, time, base64, glob, collections, shlex
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-BASE = os.environ.get("NTS_AIR_BASE", "/opt/nts-air")
-CONF = os.environ.get("NTS_AIR_CONF", "/etc/nts-air/tx.json")
-RUN = os.environ.get("NTS_AIR_RUN", "/run/nts-air")
-BELACODER = BASE + "/bin/belacoder"
-SRTLA_SEND = BASE + "/bin/srtla_send"
+WIN = os.name == "nt"
+HERE = os.path.dirname(os.path.abspath(__file__))
+if WIN:
+    BASE = os.environ.get("NTS_AIR_BASE", HERE)
+    CONF = os.environ.get("NTS_AIR_CONF", os.path.join(BASE, "tx.json"))
+    RUN = os.environ.get("NTS_AIR_RUN", os.path.join(BASE, "run"))
+    EXE = ".exe"
+else:
+    BASE = os.environ.get("NTS_AIR_BASE", "/opt/nts-air")
+    CONF = os.environ.get("NTS_AIR_CONF", "/etc/nts-air/tx.json")
+    RUN = os.environ.get("NTS_AIR_RUN", "/run/nts-air")
+    EXE = ""
+BELACODER = os.path.join(BASE, "bin", "belacoder" + EXE)
+SRTLA_SEND = os.path.join(BASE, "bin", "srtla_send" + EXE)
 LOCAL_SRT_PORT = 9000
+RUN_GST = RUN.replace("\\", "/")   # cale sigura in pipeline GStreamer
+NOWIN = 0x08000000 | 0x00000200 if WIN else 0   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
 DEFAULT = {
     "web_port": 8080, "web_user": "admin", "web_pass": "admin",
     "rx_host": "netstreaming.eu", "rx_port": 5000, "streamid": "",
     "latency": 2000, "min_kbps": 500, "max_kbps": 7000,
-    "video_src": "test", "video_dev": "/dev/video0", "input_url": "",
+    "video_src": "test", "video_dev": "" if WIN else "/dev/video0", "input_url": "",
     "width": 1920, "height": 1080, "fps": 25, "gop_sec": 2,
-    "encoder": "x264", "audio_src": "test", "audio_dev": "hw:1,0",
+    "encoder": "qsv_h264" if WIN else "x264", "audio_src": "test", "audio_dev": "" if WIN else "hw:1,0",
     "audio_kbps": 128, "av_delay": 0,
     "auto_links": True, "disabled_links": [], "autostart": False,
 }
@@ -34,11 +46,18 @@ def save_conf(c):
     with open(tmp, "w") as f: json.dump(c, f, indent=2)
     os.replace(tmp, CONF)
 
-def sh(cmd):
-    try: return subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True, timeout=5).stdout
+def sh(cmd, timeout=5):
+    try: return subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
+                               timeout=timeout, creationflags=NOWIN & 0x08000000).stdout
     except Exception: return ""
 
 # ---------------------------------------------------------------- pipeline
+ENCODERS_WIN = {
+    "qsv_h264":  ("Intel H.264 (Quick Sync)", "qsvh264enc name=venc_kbps rate-control=cbr bitrate={kb} gop-size={gop} b-frames=0 target-usage=4", "h264parse"),
+    "qsv_h265":  ("Intel HEVC (Quick Sync)", "qsvh265enc name=venc_kbps rate-control=cbr bitrate={kb} gop-size={gop} b-frames=0 target-usage=4", "h265parse"),
+    "mf_h264":   ("H.264 Media Foundation (orice GPU)", "mfh264enc name=venc_kbps rc-mode=cbr bitrate={kb} gop-size={gop} low-latency=true bframes=0", "h264parse"),
+    "x264":      ("x264 (CPU)", "x264enc name=venc_kbps speed-preset=superfast tune=zerolatency bitrate={kb} key-int-max={gop} ! video/x-h264,profile=high", "h264parse"),
+}
 ENCODERS = {
     "x264":      ("x264 (CPU)", "x264enc name=venc_kbps speed-preset=superfast tune=zerolatency bitrate={kb} key-int-max={gop} ! video/x-h264,profile=high", "h264parse"),
     "va_h264":   ("Intel H.264 (VA)", "vah264enc name=venc_kbps rate-control=cbr bitrate={kb} key-int-max={gop} b-frames=0 target-usage=4", "h264parse"),
@@ -46,6 +65,14 @@ ENCODERS = {
     "vaapi_h264":("Intel H.264 (VAAPI vechi)", "vaapih264enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h264parse"),
     "vaapi_h265":("Intel HEVC (VAAPI vechi)", "vaapih265enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h265parse"),
 }
+if WIN: ENCODERS = ENCODERS_WIN
+
+def gst_q(v):
+    """valoare intre ghilimele pentru gst_parse_launch (escape backslash/ghilimele)"""
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+def win_video_src(dev):
+    return "mfvideosrc " + (f"device-path={gst_q(dev)}" if dev else "device-index=0")
 
 def norm_url(u):
     u = str(u or "").strip().replace('"', "").replace(" ", "%20")
@@ -57,7 +84,15 @@ def build_pipeline(c):
     w, h, fps = int(c["width"]), int(c["height"]), int(c["fps"])
     gop = max(1, int(c["gop_sec"]) * fps)
     vs = c["video_src"]; dev = c["video_dev"]
-    if vs == "mjpeg":
+    if WIN and vs in ("mjpeg", "yuy2", "auto"):
+        src = win_video_src(dev)
+        if vs == "mjpeg":
+            v = f"{src} ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
+        elif vs == "yuy2":
+            v = f"{src} ! video/x-raw,width={w},height={h},framerate={fps}/1"
+        else:
+            v = f"{src} ! decodebin ! videoconvert ! videoscale ! videorate ! video/x-raw,width={w},height={h},framerate={fps}/1"
+    elif vs == "mjpeg":
         v = f"v4l2src device={dev} do-timestamp=true ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
     elif vs == "yuy2":
         v = f"v4l2src device={dev} do-timestamp=true ! video/x-raw,format=YUY2,width={w},height={h},framerate={fps}/1"
@@ -75,13 +110,16 @@ def build_pipeline(c):
     enc = enc.format(kb=int(c["max_kbps"]), gop=gop)
     p = (f"{v} ! identity name=v_delay signal-handoffs=TRUE ! queue ! videoconvert ! video/x-raw,format=NV12 ! tee name=t "
          f"t. ! queue max-size-buffers=2 leaky=downstream ! videorate max-rate=2 ! videoscale ! videoconvert ! "
-         f"video/x-raw,width=384,height=216 ! jpegenc quality=60 ! multifilesink location={RUN}/preview.jpg "
+         f"video/x-raw,width=384,height=216 ! jpegenc quality=60 ! multifilesink location={RUN_GST}/preview.jpg "
          f"t. ! queue ! {enc} ! {parse} config-interval=-1 ! "
          f"queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040 ! mux. ")
     a = c["audio_src"]
     if a != "none":
         if a == "url" and vs == "url":
             asrc = "src. ! queue max-size-time=3000000000"
+        elif a == "wasapi" or (WIN and a in ("alsa", "pulse")):
+            d = c.get("audio_dev", "")
+            asrc = "wasapi2src low-latency=true" + (f" device={gst_q(d)}" if d else "")
         elif a == "alsa":
             asrc = f"alsasrc device={c['audio_dev']} do-timestamp=true"
         elif a == "pulse":
@@ -132,9 +170,49 @@ def detect_links():
             break
     return out
 
+# --- Windows: psutil + Get-NetAdapter (fara rutare: Windows trimite pe interfata IP-ului sursa)
+WIN_SKIP = re.compile(r"(loopback|vethernet|hyper-v|virtualbox|vmware|tap-|wireguard|tailscale|zerotier|bluetooth|wintun|npcap|teredo|isatap)", re.I)
+WIN_CELL = re.compile(r"(remote ndis|rndis|mobile|wwan|lte|5g|4g|huawei|zte|quectel|sierra|fibocom|telit|hilink|modem|android|iphone|apple mobile)", re.I)
+_win_ad = {"t": 0, "map": {}}
+
+def win_adapters():
+    if time.time() - _win_ad["t"] > 20:
+        _win_ad["t"] = time.time()
+        out = sh(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                  "Get-NetAdapter | Select-Object Name,InterfaceDescription,PhysicalMediaType,ifIndex | ConvertTo-Json -Compress"], 15)
+        try:
+            j = json.loads(out or "[]")
+            if isinstance(j, dict): j = [j]
+            _win_ad["map"] = {a["Name"]: a for a in j}
+        except Exception: pass
+    return _win_ad["map"]
+
+def detect_links_win():
+    import psutil, socket as so
+    out = []; ad = win_adapters()
+    st = psutil.net_if_stats()
+    for name, addrs in psutil.net_if_addrs().items():
+        if not st.get(name) or not st[name].isup: continue
+        a = ad.get(name, {})
+        desc = (a.get("InterfaceDescription") or "") + " " + name
+        if WIN_SKIP.search(desc): continue
+        for ai in addrs:
+            if ai.family != so.AF_INET or ai.address.startswith(("127.", "169.254.")): continue
+            pm = str(a.get("PhysicalMediaType") or "")
+            kind = "wifi" if ("802.11" in pm or re.search(r"wi-?fi|wireless|wlan", desc, re.I)) else \
+                   "cell" if ("Wireless WAN" in pm or WIN_CELL.search(desc)) else "eth"
+            out.append({"if": name, "ip": ai.address, "plen": 0, "gw": None, "kind": kind,
+                        "idx": a.get("ifIndex", 0), "desc": a.get("InterfaceDescription", "")})
+            break
+    return out
+
+if WIN:
+    detect_links = detect_links_win
+
 class Router:
     def __init__(self): self.applied = {}
     def apply(self, links):
+        if WIN: return
         want = {}
         for l in links:
             t = 100 + int(l["idx"])
@@ -157,11 +235,18 @@ class Router:
             if r.returncode: break
         sh(["ip", "route", "flush", "table", str(t)])
     def clear(self):
+        if WIN: return
         for t in list(self.applied): self.flush(t)
         self.applied = {}
 
 def read_netdev():
     d = {}
+    if WIN:
+        try:
+            import psutil
+            for n, v in psutil.net_io_counters(pernic=True).items(): d[n] = (v.bytes_recv, v.bytes_sent)
+        except Exception: pass
+        return d
     try:
         for line in open("/proc/net/dev").read().splitlines()[2:]:
             n, v = line.split(":", 1); v = v.split()
@@ -198,7 +283,8 @@ class Engine:
         if ips != old:
             with open(self.ipfile, "w") as f: f.write(ips)
             if self.bond and self.bond.poll() is None:
-                self.bond.send_signal(signal.SIGHUP); self.L("Legaturi actualizate: " + ips.strip().replace("\n", ", "))
+                if not WIN: self.bond.send_signal(signal.SIGHUP)   # pe Windows srtla_send citeste singur fisierul
+                self.L("Legaturi actualizate: " + ips.strip().replace("\n", ", "))
 
     def write_bitrate(self):
         with open(self.brfile, "w") as f:
@@ -213,8 +299,9 @@ class Engine:
 
     def spawn(self, cmd, tag):
         self.L(f"[{tag}] start: " + " ".join(shlex.quote(x) for x in cmd))
+        kw = {"creationflags": NOWIN} if WIN else {"start_new_session": True}
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                             start_new_session=True)
+                             encoding="utf-8", errors="replace", **kw)
         threading.Thread(target=self.reader, args=(p, tag), daemon=True).start()
         return p
 
@@ -239,6 +326,10 @@ class Engine:
             self.write_ips(); self.start_bond(); time.sleep(0.5); self.start_enc()
 
     def kill(self, p):
+        if p and p.poll() is None and WIN:
+            try: p.terminate(); p.wait(3)
+            except Exception: pass
+            return
         if p and p.poll() is None:
             try:
                 os.killpg(p.pid, signal.SIGTERM); p.wait(3)
@@ -256,7 +347,7 @@ class Engine:
         with self.lock:
             self.c["max_kbps"] = max(int(self.c["min_kbps"]) + 100, min(50000, int(kbps)))
             save_conf(self.c); self.write_bitrate()
-            if self.enc and self.enc.poll() is None: self.enc.send_signal(signal.SIGHUP)
+            if self.enc and self.enc.poll() is None and not WIN: self.enc.send_signal(signal.SIGHUP)
 
     def loop(self):
         n = 0
@@ -298,7 +389,30 @@ class Engine:
                 "links": links, "log": list(self.log)[-60:],
                 "has_preview": os.path.exists(RUN + "/preview.jpg") and self.live}
 
+def gst_unesc(x):
+    return re.sub(r"\\(.)", r"\1", x)
+
+_devcache = {"t": 0, "v": None}
+def devices_win():
+    if _devcache["v"] and time.time() - _devcache["t"] < 60: return _devcache["v"]
+    out = sh(["gst-device-monitor-1.0", "Video/Source", "Audio/Source"], 15)
+    v, a = [], []
+    for blk in out.split("Device found:")[1:]:
+        name = re.search(r"name\s*:\s*(.+)", blk); cls = re.search(r"class\s*:\s*(\S+)", blk)
+        name = name.group(1).strip() if name else "?"; cls = cls.group(1) if cls else ""
+        mv = re.search(r'mfvideosrc device-path="((?:[^"\\]|\\.)*)"', blk) or re.search(r"mfvideosrc device-path=(\S+)", blk)
+        ma = re.search(r'wasapi2src device="((?:[^"\\]|\\.)*)"', blk) or re.search(r"wasapi2src device=(\S+)", blk)
+        if cls.startswith("Video") and mv:
+            v.append({"dev": gst_unesc(mv.group(1)), "name": name})
+        elif cls.startswith("Audio") and ma and "loopback" not in blk.lower():
+            a.append({"dev": gst_unesc(ma.group(1)), "name": name})
+    r = {"video": v, "audio": a, "gpu": True, "platform": "win",
+         "encoders": {k: x[0] for k, x in ENCODERS.items()}}
+    _devcache.update(t=time.time(), v=r)
+    return r
+
 def devices():
+    if WIN: return devices_win()
     v = []
     for d in sorted(glob.glob("/dev/video*")):
         n = os.path.basename(d)
@@ -309,7 +423,7 @@ def devices():
     for m in re.finditer(r"card (\d+): ([^,]+).*?device (\d+): ([^\n]+)", sh("arecord -l")):
         a.append({"dev": f"hw:{m.group(1)},{m.group(3)}", "name": f"{m.group(2).strip()} / {m.group(4).strip()}"})
     gpu = os.path.exists("/dev/dri/renderD128")
-    return {"video": v, "audio": a, "gpu": gpu,
+    return {"video": v, "audio": a, "gpu": gpu, "platform": "linux",
             "encoders": {k: v[0] for k, v in ENCODERS.items()}}
 
 E = None
