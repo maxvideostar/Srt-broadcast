@@ -171,7 +171,7 @@ DEFAULT = {
     "web_port": 8080, "web_user": "admin", "web_pass": "admin",
     "rx_host": "netstreaming.eu", "rx_port": 5000, "streamid": "",
     "latency": 2000, "min_kbps": 500, "max_kbps": 7000,
-    "video_src": "test", "video_dev": "/dev/video0",
+    "video_src": "test", "video_dev": "/dev/video0", "input_url": "",
     "width": 1920, "height": 1080, "fps": 25, "gop_sec": 2,
     "encoder": "x264", "audio_src": "test", "audio_dev": "hw:1,0",
     "audio_kbps": 128, "av_delay": 0,
@@ -204,6 +204,12 @@ ENCODERS = {
     "vaapi_h265":("Intel HEVC (VAAPI vechi)", "vaapih265enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h265parse"),
 }
 
+def norm_url(u):
+    u = str(u or "").strip().replace('"', "").replace(" ", "%20")
+    if u.startswith("udp://@"): u = "udp://" + u[7:]          # stil ffmpeg/VLC
+    if u.startswith("rtp://@"): u = "rtp://" + u[7:]
+    return u
+
 def build_pipeline(c):
     w, h, fps = int(c["width"]), int(c["height"]), int(c["fps"])
     gop = max(1, int(c["gop_sec"]) * fps)
@@ -212,6 +218,10 @@ def build_pipeline(c):
         v = f"v4l2src device={dev} do-timestamp=true ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
     elif vs == "yuy2":
         v = f"v4l2src device={dev} do-timestamp=true ! video/x-raw,format=YUY2,width={w},height={h},framerate={fps}/1"
+    elif vs == "url":
+        v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
+             f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "auto":
         v = f"v4l2src device={dev} do-timestamp=true ! decodebin ! videoconvert ! videoscale ! videorate ! video/x-raw,width={w},height={h},framerate={fps}/1"
     else:
@@ -227,7 +237,9 @@ def build_pipeline(c):
          f"queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040 ! mux. ")
     a = c["audio_src"]
     if a != "none":
-        if a == "alsa":
+        if a == "url" and vs == "url":
+            asrc = "src. ! queue max-size-time=3000000000"
+        elif a == "alsa":
             asrc = f"alsasrc device={c['audio_dev']} do-timestamp=true"
         elif a == "pulse":
             asrc = "pulsesrc do-timestamp=true"
@@ -625,7 +637,9 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
   <div class="card"><h2>Encoder</h2><div class="grid">
    <label>Sursă video<select id="video_src">
      <option value="test">Test pattern</option><option value="mjpeg">Captură HDMI USB (MJPEG)</option>
-     <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option></select></label>
+     <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option>
+     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option></select></label>
+   <label id="urlbox" style="grid-column:1/-1">Link sursă<input id="input_url" placeholder="rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101  ·  srt://ip:9000  ·  rtmp://server/live/cheie  ·  udp://@239.1.1.1:1234  ·  http://.../index.m3u8"></label>
    <label>Dispozitiv video<select id="video_dev"></select></label>
    <label>Encoder<select id="encoder"></select></label>
    <label>Rezoluție<select id="res"><option>1920x1080</option><option>1280x720</option><option>3840x2160</option><option>720x576</option></select></label>
@@ -633,7 +647,7 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>GOP (sec)<input id="gop_sec" type="number"></label>
    <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
    <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
-   <label>Sursă audio<select id="audio_src"><option value="alsa">ALSA (placă captură)</option><option value="pulse">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="alsa">ALSA (placă captură)</option><option value="pulse">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
    <label>Dispozitiv audio<select id="audio_dev"></select></label>
    <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
    <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
@@ -681,16 +695,19 @@ async function load(){
  $('video_dev').innerHTML=(d.video.length?d.video:[{dev:'/dev/video0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
  $('audio_dev').innerHTML=(d.audio.length?d.audio:[{dev:'hw:1,0',name:'(niciunul detectat)'}]).map(v=>`<option value="${v.dev}">${v.dev} – ${v.name}</option>`).join('');
  $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
- ['rx_host','rx_port','streamid','latency','video_src','video_dev','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
+ ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
  $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;
 }
+function srcUI(user){const u=$('video_src').value=='url';$('urlbox').style.display=u?'':'none';
+ const a=$('audio_src');[...a.options].find(o=>o.value=='url').disabled=!u;if(u&&user&&a.value=='test')a.value='url';if(!u&&a.value=='url')a.value='test'}
 async function save(){
- const b={};['rx_host','streamid','video_src','video_dev','encoder','audio_src','audio_dev','web_pass'].forEach(k=>b[k]=$(k).value);
+ const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass'].forEach(k=>b[k]=$(k).value);
  ['rx_port','latency','fps','gop_sec','min_kbps','max_kbps','audio_kbps','av_delay'].forEach(k=>b[k]=+$(k).value);
  const [w,h]=$('res').value.split('x');b.width=+w;b.height=+h;b.autostart=$('autostart').checked;
  const r=await api('/api/config',b);$('msg').textContent=r.restarted?'Salvat – transmisia a repornit':'Salvat';setTimeout(()=>$('msg').textContent='',3000);$('web_pass').value='';
 }
-load();tick();setInterval(tick,1000);
+$('video_src').onchange=()=>srcUI(true);
+load().then(()=>srcUI(false));tick();setInterval(tick,1000);
 </script></body></html>
 NTS_HTML_EOF
 chmod 755 $BASE/air.py

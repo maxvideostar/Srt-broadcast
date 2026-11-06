@@ -14,7 +14,7 @@ DEFAULT = {
     "web_port": 8080, "web_user": "admin", "web_pass": "admin",
     "rx_host": "netstreaming.eu", "rx_port": 5000, "streamid": "",
     "latency": 2000, "min_kbps": 500, "max_kbps": 7000,
-    "video_src": "test", "video_dev": "/dev/video0",
+    "video_src": "test", "video_dev": "/dev/video0", "input_url": "",
     "width": 1920, "height": 1080, "fps": 25, "gop_sec": 2,
     "encoder": "x264", "audio_src": "test", "audio_dev": "hw:1,0",
     "audio_kbps": 128, "av_delay": 0,
@@ -47,6 +47,12 @@ ENCODERS = {
     "vaapi_h265":("Intel HEVC (VAAPI vechi)", "vaapih265enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h265parse"),
 }
 
+def norm_url(u):
+    u = str(u or "").strip().replace('"', "").replace(" ", "%20")
+    if u.startswith("udp://@"): u = "udp://" + u[7:]          # stil ffmpeg/VLC
+    if u.startswith("rtp://@"): u = "rtp://" + u[7:]
+    return u
+
 def build_pipeline(c):
     w, h, fps = int(c["width"]), int(c["height"]), int(c["fps"])
     gop = max(1, int(c["gop_sec"]) * fps)
@@ -55,6 +61,10 @@ def build_pipeline(c):
         v = f"v4l2src device={dev} do-timestamp=true ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
     elif vs == "yuy2":
         v = f"v4l2src device={dev} do-timestamp=true ! video/x-raw,format=YUY2,width={w},height={h},framerate={fps}/1"
+    elif vs == "url":
+        v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
+             f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "auto":
         v = f"v4l2src device={dev} do-timestamp=true ! decodebin ! videoconvert ! videoscale ! videorate ! video/x-raw,width={w},height={h},framerate={fps}/1"
     else:
@@ -70,7 +80,9 @@ def build_pipeline(c):
          f"queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040 ! mux. ")
     a = c["audio_src"]
     if a != "none":
-        if a == "alsa":
+        if a == "url" and vs == "url":
+            asrc = "src. ! queue max-size-time=3000000000"
+        elif a == "alsa":
             asrc = f"alsasrc device={c['audio_dev']} do-timestamp=true"
         elif a == "pulse":
             asrc = "pulsesrc do-timestamp=true"

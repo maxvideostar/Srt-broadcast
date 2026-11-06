@@ -27,7 +27,7 @@ Utilizator/parolă implicite: `admin` / `admin`. Schimbă parola din panou.
 ## Transmițător (`tx`)
 
 - Panou care imită aparatul: ecran cu preview, bitrate mare, timer de live, iconițe pentru legături. Butonul central pornește/oprește transmisia, iar ◀ ▶ schimbă bitrate-ul maxim în timpul transmisiei.
-- Surse: captură HDMI USB (MJPEG), YUY2/CamLink, auto-detect sau test pattern. Audio: ALSA, PulseAudio sau ton de test.
+- Surse: captură HDMI USB (MJPEG), YUY2/CamLink, auto-detect, test pattern sau **link de rețea** (RTSP de la camere IP, SRT, RTMP, UDP/multicast, HTTP/HLS). Audio: din link, ALSA, PulseAudio sau ton de test.
 - Encodare: Intel VA H.264/HEVC, VAAPI (pentru GStreamer mai vechi) sau x264. Bitrate-ul se adaptează la rețea între min și max (belacoder).
 - Bonding: SRTLA. Interfețele cu IP sunt detectate automat. Rutarea pe sursă (o tabelă pentru fiecare legătură) se face automat, iar orice legătură se poate dezactiva din panou.
 - Dacă encoderul sau o legătură cade, pornesc automat din nou. Transmisia poate porni singură la boot.
