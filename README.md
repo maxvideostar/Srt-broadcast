@@ -58,6 +58,10 @@ Panou în stil StreamHub, cu mai multe canale. Fiecare canal are propriul port U
   - `udp://IP:port` pentru unicast sau multicast (`?ttl=4&localaddr=IP`).
   - `srt://...` ca listener sau caller.
   - `rtmp://...` (doar H.264).
+  - `http://0.0.0.0:8000/cale`: HTTP-TS pe un port separat, ca output-ul `http` din Astra. Mai multe canale pot folosi același port, cu căi diferite.
+  - `rtp://239.x.x.x:port?ttl=4`: multicast RTP (MP2T, PT 33), pe lângă multicast UDP simplu.
+  - `hdmi://?connector=HDMI-A-1&audio=alsa/hdmi:CARD=PCH,DEV=0`: decodare pe ecranul serverului (mpv pe DRM/KMS, accelerare hardware), ca un decoder StreamHub. Merge doar pe un server fizic fără desktop pornit. Ecranele conectate apar în fereastra de editare a canalului.
+  - În fereastra canalului ai butoane gata făcute pentru fiecare tip de ieșire.
 - Configurația se păstrează în `/etc/nts-air/rx.json`.
 
 Porturi: UDP 5000+ pentru canale și TCP 8090 pentru panou. Le deschizi și în firewall-ul providerului.

@@ -86,7 +86,7 @@ install_rx(){
   WP=${WEB_PORT:-8090}
   say "Pachete build + ffmpeg"
   apt-get update -qq
-  apt-get install -y -qq build-essential git cmake tclsh libssl-dev pkg-config python3 ffmpeg
+  apt-get install -y -qq build-essential git cmake tclsh libssl-dev pkg-config python3 ffmpeg mpv
   mkdir -p $SRC $BASE/bin $ETC
   say "Compilez SRT patch-uit BELABOX (srt-live-transmit, static)"
   fetch BELABOX/srt $SRC/srt
@@ -138,6 +138,8 @@ U
   echo; say "GATA. Panou receiver: http://$IP:$WP  (admin / admin - schimba parola din panou)"
   echo "    Fiecare canal = un port UDP SRTLA (implicit 5000). Deschide porturile UDP in firewall."
   echo "    Link HTTP-TS per canal: http://$IP:$WP/live/NUME.ts  (sau /NUME)"
+  echo "    Iesiri extra din panou: HTTP stil Astra (http://0.0.0.0:8000/cale), multicast UDP/RTP, SRT, RTMP, HDMI"
+  echo "    Pentru porturile HTTP extra (ex. 8000): ufw allow 8000/tcp"
 }
 
 status(){

@@ -52,6 +52,7 @@ dialog label{display:block;font-size:12px;color:var(--mut);margin-top:10px}
 dialog input,dialog textarea{width:100%;margin-top:3px;background:#0e1115;border:1px solid var(--line);color:var(--tx);padding:8px;border-radius:7px;font:inherit}
 dialog textarea{font:12px ui-monospace,monospace;height:110px}
 .row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.tpl{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.tpl button{font-size:12px;padding:5px 9px}
 .err{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
 .help{font-size:11px;color:var(--mut);margin-top:4px;line-height:1.5}
 </style></head><body>
@@ -75,9 +76,20 @@ dialog textarea{font:12px ui-monospace,monospace;height:110px}
   <label>Latență (ms)<input id="f_lat" type="number" value="2000"></label>
   <label>lossmaxttl<input id="f_ttl" type="number" value="40"></label>
  </div>
+ <div class="tpl" id="tpl">
+  <button type="button" onclick="addOut('http')">+ HTTP (Astra)</button>
+  <button type="button" onclick="addOut('udp')">+ Multicast UDP</button>
+  <button type="button" onclick="addOut('rtp')">+ Multicast RTP</button>
+  <button type="button" onclick="addOut('srt')">+ SRT</button>
+  <button type="button" onclick="addOut('rtmp')">+ RTMP</button>
+  <button type="button" onclick="addOut('hdmi')">+ HDMI</button>
+ </div>
  <label>Ieșiri (câte una pe linie, max 8)<textarea id="f_out" placeholder="udp://127.0.0.1:5010&#10;udp://239.1.1.10:1234?ttl=4&#10;srt://0.0.0.0:6001?mode=listener&#10;rtmp://localhost/live/cam1"></textarea></label>
  <div class="help">HTTP-TS e mereu activ: <b>http://server:PORT/live/NUME.ts</b> și <b>/NUME</b>.<br>
-  udp:// unicast/multicast (opțional ?ttl=4&amp;localaddr=IP) · srt:// listener sau caller · rtmp:// (doar H.264)</div>
+  <b>http://0.0.0.0:8000/cale</b> = HTTP-TS pe port separat, ca la Astra (mai multe canale pot folosi același port cu căi diferite)<br>
+  <b>udp://</b> / <b>rtp://</b> unicast sau multicast (?ttl=4&amp;localaddr=IP-placa) · <b>srt://</b> listener/caller · <b>rtmp://</b> (doar H.264)<br>
+  <b>hdmi://</b> = decodare pe ecranul serverului (?connector=HDMI-A-1&amp;audio=alsa/hdmi:CARD=PCH,DEV=0) — server fizic, fără desktop pornit
+  <div id="hdmiinfo" style="margin-top:4px"></div></div>
  <label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" id="f_en" style="width:auto" checked> Activ</label>
  <div class="err" id="ferr"></div>
  <div class="acts" style="justify-content:flex-end"><button onclick="dlg.close()">Anulează</button><button class="p" onclick="saveCh()">Salvează</button></div>
@@ -115,7 +127,8 @@ function card(c){
   <h4>Ieșiri</h4>
   <div class="outs">
    <div><span class="dot"></span><a onclick="cp('${base}/live/${esc(c.name)}.ts')">${base}/live/${esc(c.name)}.ts</a></div>
-   ${c.out_status.map(o=>`<div><span class="dot ${o.ok?'':'x'}"></span>${esc(o.url)}</div>`).join('')}
+   ${c.out_status.map(o=>{const u=o.http?`http://${location.hostname}:${o.port}${o.path}`:'';
+     return `<div><span class="dot ${o.ok?'':'x'}"></span>${o.http?`<a onclick="cp('${esc(u)}')" title="copiază">${esc(u)}</a>`:esc(o.url)}</div>`}).join('')}
    ${c.clients.length?`<div class="mut">Clienți HTTP: ${c.clients.map(k=>esc(k.ip)+' ('+fmt(k.since)+')').join(', ')}</div>`:''}
   </div>
   <div class="acts"><button onclick="edit(${c.id})">Editează</button><button onclick="act(${c.id},'restart')">Restart</button>
@@ -139,8 +152,18 @@ function edit(id){
  $('dt').textContent=c?'Editează '+c.name:'Canal nou';
  const used=S.channels.map(x=>x.srtla_port);let np=5000;while(used.includes(np))np++;
  $('f_name').value=c?c.name:'cam'+(S.channels.length+1);$('f_port').value=c?c.srtla_port:np;
- $('f_lat').value=c?c.latency:2000;$('f_ttl').value=c?c.lossmaxttl:40;$('f_out').value=c?c.outputs.join('\n'):'';$('f_en').checked=c?c.enabled:true;
+ loadHdmi();$('f_lat').value=c?c.latency:2000;$('f_ttl').value=c?c.lossmaxttl:40;$('f_out').value=c?c.outputs.join('\n'):'';$('f_en').checked=c?c.enabled:true;
  dlg.showModal()}
+let HDMI=[];
+async function loadHdmi(){try{HDMI=await api('/api/hdmi')}catch(e){HDMI=[]}
+ $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server'}
+function addOut(t){
+ const n=$('f_name').value.trim()||'canal',ta=$('f_out');
+ const used=S.channels.length+1;
+ const conn=(HDMI.find(x=>x.status=='connected')||{}).connector;
+ const v={http:`http://0.0.0.0:8000/${n}`,udp:`udp://239.255.1.${used}:1234?ttl=4`,rtp:`rtp://239.255.1.${used}:1234?ttl=4`,
+  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto'}[t];
+ ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+v}
 async function saveCh(){
  const b={name:$('f_name').value.trim(),srtla_port:+$('f_port').value,latency:+$('f_lat').value,lossmaxttl:+$('f_ttl').value,outputs:$('f_out').value,enabled:$('f_en').checked};
  const r=await api(editing?`/api/channel/${editing}/update`:'/api/channel',b);

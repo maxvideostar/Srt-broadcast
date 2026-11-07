@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # nTs-AIR Receiver - panou StreamHub-like pentru transmitatoare bonded (SRTLA)
-import json, os, re, signal, socket, struct, subprocess, threading, time, base64, collections, shlex, queue
+import json, os, re, signal, socket, struct, subprocess, threading, time, base64, collections, shlex, queue, glob
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -116,6 +116,106 @@ def operator(host):
         if k in h: return v
     return ""
 
+# ------------------------------------------------------------- HDMI (mpv pe DRM/KMS, fara desktop)
+MPV = os.environ.get("MPV", "mpv")
+
+def hdmi_connectors():
+    out = []
+    for st in sorted(glob.glob("/sys/class/drm/card*-*/status")):
+        name = os.path.basename(os.path.dirname(st))          # card1-HDMI-A-1
+        card, _, conn = name.partition("-")
+        try: status = open(st).read().strip()
+        except Exception: status = "?"
+        if conn.startswith(("Writeback", "Virtual")): continue
+        out.append({"card": card, "connector": conn, "status": status})
+    return out
+
+def hdmi_cmd(u, src):
+    """hdmi://?connector=HDMI-A-1&card=card1&audio=alsa/hdmi:CARD=PCH,DEV=0&hwdec=auto-safe"""
+    q = {k: v[0] for k, v in parse_qs(u.query).items()}
+    conn = q.get("connector") or (u.hostname if u.hostname and u.hostname != "auto" else "")
+    card = q.get("card", "")
+    if not conn:
+        for c in hdmi_connectors():
+            if c["status"] == "connected": conn, card = c["connector"], card or c["card"]; break
+    cmd = [MPV, "--no-terminal", "--msg-level=all=warn", "--fs", "--no-osc", "--no-input-default-bindings",
+           "--profile=low-latency", "--cache=no", "--hwdec=" + q.get("hwdec", "auto-safe"),
+           "--vo=" + q.get("vo", "gpu")]
+    if q.get("vo", "gpu") == "gpu":
+        cmd.append("--gpu-context=drm")
+        if card: cmd.append("--drm-device=/dev/dri/" + card)
+        if conn: cmd.append("--drm-connector=" + conn)
+        if q.get("mode"): cmd.append("--drm-mode=" + q["mode"])
+    if q.get("audio"): cmd.append("--audio-device=" + q["audio"])
+    if q.get("ao"): cmd.append("--ao=" + q["ao"])
+    cmd.append(src)
+    return cmd
+
+# ------------------------------------------------------------- iesiri HTTP stil Astra
+def stream_to_client(h, ch, internal=False):
+    """trimite MPEG-TS catre clientul HTTP h (BaseHTTPRequestHandler)"""
+    q = queue.Queue(maxsize=2000)
+    ip = h.headers.get("X-Real-IP") or h.client_address[0]
+    ch.cid += 1; cid = ch.cid
+    ch.clients[cid] = {"ip": ip, "t": now(), "ua": h.headers.get("User-Agent", ""), "q": q,
+                       "drop": 0, "internal": internal}
+    h.close_connection = True
+    try:
+        h.send_response(200); h.send_header("Content-Type", "video/mp2t")
+        h.send_header("Cache-Control", "no-cache"); h.send_header("Connection", "close")
+        h.send_header("Access-Control-Allow-Origin", "*")
+        h.end_headers()
+        buf = bytearray()
+        while True:
+            try: d = q.get(timeout=10)
+            except queue.Empty: break
+            if d is None: break
+            buf += d
+            if len(buf) >= 1316 * 5 or q.empty():
+                h.wfile.write(buf); buf.clear()
+    except Exception: pass
+    finally:
+        ch.clients.pop(cid, None)
+
+class HttpOuts:
+    """servere HTTP pe porturi separate: http://0.0.0.0:8000/cale -> canal (ca output-ul http din Astra)"""
+    def __init__(self):
+        self.lock = threading.Lock(); self.servers = {}; self.routes = {}
+    def add(self, host, port, path, ch):
+        key = (host, int(port))
+        with self.lock:
+            self.routes.setdefault(key, {})[path] = ch
+            if key in self.servers: return True
+            mgr = self
+            class HH(BaseHTTPRequestHandler):
+                protocol_version = "HTTP/1.1"
+                def log_message(self, *a): pass
+                def do_GET(self):
+                    pth = unquote(self.path.split("?")[0])
+                    with mgr.lock: c = mgr.routes.get(key, {}).get(pth)
+                    if c is None or not c.running:
+                        self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+                    stream_to_client(self, c)
+            try:
+                srv = ThreadingHTTPServer((host, int(port)), HH); srv.daemon_threads = True
+            except OSError as e:
+                ch.L(f"HTTP {host}:{port} indisponibil: {e}")
+                return False
+            self.servers[key] = srv
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            ch.L(f"HTTP output pornit pe {host}:{port}")
+            return True
+    def remove(self, k3, ch):
+        host, port, path = k3; key = (host, int(port))
+        with self.lock:
+            r = self.routes.get(key, {})
+            if r.get(path) is ch: del r[path]
+            if not r and key in self.servers:
+                srv = self.servers.pop(key); self.routes.pop(key, None)
+                threading.Thread(target=srv.shutdown, daemon=True).start()
+                try: srv.server_close()
+                except Exception: pass
+
 # ------------------------------------------------------------- channel
 class Proc:
     def __init__(self, tag, cmd, on_line=None, log=None):
@@ -160,7 +260,7 @@ class Channel:
         self.cid = 0
         self.info = {}; self.thumb_t = 0; self.thumb_busy = False
         self.links = {}; self.last_data = 0
-        self.procs = []; self.udp_out = []; self.helpers = []
+        self.procs = []; self.udp_out = []; self.helpers = []; self.http_out = []
         self.running = False; self.rx_sock = None
 
     # porturi interne unice per canal
@@ -198,12 +298,12 @@ class Channel:
                            f"udp://127.0.0.1:{self.p_udp}"], self.on_slt, self.L)
         rec = Proc("srtla", [SRTLA_REC, str(int(c["srtla_port"])), "127.0.0.1", str(self.p_srt)], None, self.L)
         self.procs = [slt, rec]
-        self.udp_out = []; self.helpers = []
+        self.udp_out = []; self.helpers = []; self.http_out = []
         for k, url in enumerate(c.get("outputs", [])):
             url = url.strip()
             if not url: continue
             u = urlparse(url)
-            if u.scheme == "udp":
+            if u.scheme in ("udp", "rtp"):
                 q = parse_qs(u.query)
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
@@ -212,12 +312,19 @@ class Channel:
                         s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(q["localaddr"][0]))
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
                 except Exception: pass
-                self.udp_out.append({"url": url, "sock": s, "addr": (u.hostname, u.port or 1234), "err": 0})
-            elif u.scheme in ("srt", "rtmp", "rtmps"):
+                self.udp_out.append({"url": url, "sock": s, "addr": (u.hostname, u.port or 1234), "err": 0,
+                                     "rtp": u.scheme == "rtp", "seq": 0, "ssrc": int.from_bytes(os.urandom(4), "big")})
+            elif u.scheme == "http":
+                path = u.path if u.path not in ("", "/") else "/" + c["name"]
+                ok = self.hub.httpouts.add(u.hostname or "0.0.0.0", u.port or 8000, path, self)
+                self.http_out.append({"url": url, "key": (u.hostname or "0.0.0.0", u.port or 8000, path), "ok": ok})
+            elif u.scheme in ("srt", "rtmp", "rtmps", "hdmi"):
                 hp = self.p_helper(k + 0) if k < 8 else None
                 if hp is None: continue
                 if u.scheme == "srt":
                     cmd = [SLT, "-a:yes", f"udp://127.0.0.1:{hp}", url]
+                elif u.scheme == "hdmi":
+                    cmd = hdmi_cmd(u, f"udp://127.0.0.1:{hp}")
                 else:
                     cmd = [FFMPEG, "-hide_banner", "-loglevel", "warning", "-fflags", "+genpts",
                            "-f", "mpegts", "-i", f"udp://127.0.0.1:{hp}?fifo_size=1000000&overrun_nonfatal=1",
@@ -242,7 +349,13 @@ class Channel:
             except Exception: break
             self.bytes += len(data); self.last_data = now()
             for o in self.udp_out:
-                try: o["sock"].sendto(data, o["addr"])
+                try:
+                    if o["rtp"]:
+                        o["seq"] = (o["seq"] + 1) & 0xFFFF
+                        hdr = struct.pack("!BBHII", 0x80, 33, o["seq"], int(now() * 90000) & 0xFFFFFFFF, o["ssrc"])
+                        o["sock"].sendto(hdr + data, o["addr"])
+                    else:
+                        o["sock"].sendto(data, o["addr"])
                 except Exception: o["err"] += 1
             for h in self.helpers:
                 try: h["sock"].sendto(data, h["addr"])
@@ -260,6 +373,8 @@ class Channel:
         for p in self.procs: p.stop()
         for h in self.helpers: h["proc"].stop(); h["sock"].close()
         for o in self.udp_out: o["sock"].close()
+        for o in self.http_out: self.hub.httpouts.remove(o["key"], self)
+        self.http_out = []
         for cl in list(self.clients.values()):
             try: cl["q"].put_nowait(None)
             except Exception: pass
@@ -337,6 +452,8 @@ class Channel:
                 "clients": [{"ip": v["ip"], "since": int(t - v["t"]), "ua": v["ua"][:60], "drop": v["drop"]}
                             for v in list(self.clients.values()) if not v.get("internal")],
                 "out_status": [{"url": o["url"], "ok": True} for o in self.udp_out] +
+                              [{"url": o["url"], "ok": o["ok"], "http": True,
+                                "port": o["key"][1], "path": o["key"][2]} for o in self.http_out] +
                               [{"url": h["url"], "ok": h["proc"].alive()} for h in self.helpers],
                 "log": list(self.log)[-40:]}
 
@@ -344,7 +461,7 @@ class Channel:
 class Hub:
     def __init__(self):
         self.conf = load_conf(); self.lock = threading.RLock()
-        self.chans = {}; self.sniff = Sniffer(); self.t0 = now()
+        self.chans = {}; self.sniff = Sniffer(); self.t0 = now(); self.httpouts = HttpOuts()
         for c in self.conf["channels"]:
             self.add(c, save=False)
         threading.Thread(target=self.loop, daemon=True).start()
@@ -373,6 +490,26 @@ class Hub:
             if c.cfg["name"] == name: return "Exista deja un canal cu acest nume"
             if int(c.cfg["srtla_port"]) == port: return "Portul e deja folosit de " + c.cfg["name"]
         if port == int(self.conf["web_port"]): return "Port ocupat de panou"
+        outs = b.get("outputs", [])
+        if isinstance(outs, str): outs = outs.splitlines()
+        for o in outs:
+            o = o.strip()
+            if not o: continue
+            u = urlparse(o)
+            if u.scheme not in ("udp", "rtp", "srt", "rtmp", "rtmps", "http", "hdmi"):
+                return "Ieșire necunoscută: " + o
+            if u.scheme == "http":
+                hp = u.port or 8000
+                if hp == int(self.conf["web_port"]):
+                    return f"Portul {hp} e al panoului (acolo /live/NUME.ts e deja activ) - alege alt port"
+                path = u.path if u.path not in ("", "/") else "/" + name
+                for c in self.chans.values():
+                    if c.id == cur_id: continue
+                    for o2 in c.cfg.get("outputs", []):
+                        u2 = urlparse(o2.strip())
+                        if u2.scheme == "http" and (u2.port or 8000) == hp:
+                            p2 = u2.path if u2.path not in ("", "/") else "/" + c.cfg["name"]
+                            if p2 == path: return f"Calea {path} pe portul {hp} e deja folosită de {c.cfg['name']}"
         return None
 
     def norm(self, b):
@@ -455,28 +592,8 @@ class H(BaseHTTPRequestHandler):
         except Exception: return {}
 
     def stream(self, ch):
-        q = queue.Queue(maxsize=2000)
-        ip = self.headers.get("X-Real-IP") or self.client_address[0]
         internal = "thumb=1" in self.path and self.client_address[0] == "127.0.0.1"
-        ch.cid += 1; cid = ch.cid
-        ch.clients[cid] = {"ip": ip, "t": now(), "ua": self.headers.get("User-Agent", ""), "q": q,
-                           "drop": 0, "internal": internal}
-        self.close_connection = True
-        try:
-            self.send_response(200); self.send_header("Content-Type", "video/mp2t")
-            self.send_header("Cache-Control", "no-cache"); self.send_header("Connection", "close")
-            self.end_headers()
-            buf = bytearray()
-            while True:
-                try: d = q.get(timeout=10)
-                except queue.Empty: break
-                if d is None: break
-                buf += d
-                if len(buf) >= 1316 * 5 or q.empty():
-                    self.wfile.write(buf); buf.clear()
-        except Exception: pass
-        finally:
-            ch.clients.pop(cid, None)
+        stream_to_client(self, ch, internal)
 
     def find(self, name):
         for c in H_.chans.values():
@@ -492,6 +609,7 @@ class H(BaseHTTPRequestHandler):
             html = open(os.path.join(HERE, "rx.html"), encoding="utf-8").read()
             return self.out(200, html, "text/html; charset=utf-8")
         if p == "/api/status": return self.out(200, H_.status())
+        if p == "/api/hdmi": return self.out(200, hdmi_connectors())
         mt = re.match(r"^/thumb/(\d+)\.jpg$", p)
         if mt:
             try: return self.out(200, open(f"{RUN}/thumb_{int(mt.group(1))}.jpg", "rb").read(), "image/jpeg")
