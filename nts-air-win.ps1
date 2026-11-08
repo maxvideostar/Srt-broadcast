@@ -63,6 +63,7 @@ DEFAULT = {
     "audio_kbps": 128, "av_delay": 0,
     "auto_links": True, "disabled_links": [], "autostart": False,
     "dl_device": 0, "dl_mode": "auto", "dl_conn": "auto",
+    "mc_group": "239.255.1.1", "mc_port": 1234, "mc_proto": "udp", "mc_iface": "",
 }
 
 def load_conf():
@@ -133,8 +134,19 @@ def build_pipeline(c):
         v = (f"decklinkvideosrc {dl} mode={c.get('dl_mode', 'auto')} connection={c.get('dl_conn', 'auto')} ! "
              f"queue ! videoconvert ! deinterlace method=linear ! videoconvert ! videoscale ! videorate ! "
              f"video/x-raw,width={w},height={h},framerate={fps}/1")
-    elif vs == "url":
+    elif vs in ("url", "astra"):
         v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
+             f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
+    elif vs == "multicast":
+        grp = re.sub(r"[^0-9a-fA-F.:]", "", str(c.get("mc_group", "")))
+        port = int(c.get("mc_port", 1234))
+        iface = re.sub(r"[^\w.\- ]", "", str(c.get("mc_iface", "")))
+        us = f"udpsrc uri=udp://{grp}:{port} buffer-size=8388608" + (f" multicast-iface={gst_q(iface)}" if iface else "")
+        if c.get("mc_proto") == "rtp":
+            us += (' caps="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)MP2T,payload=(int)33"'
+                   " ! rtpjitterbuffer latency=200 ! rtpmp2tdepay")
+        v = (f"{us} ! queue max-size-time=3000000000 ! decodebin name=src "
              f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
              f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "auto":
@@ -154,7 +166,7 @@ def build_pipeline(c):
     if a != "none":
         if a == "decklink":
             asrc = f"decklinkaudiosrc device-number={int(c.get('dl_device', 0))} channels=2"
-        elif a == "url" and vs == "url":
+        elif a == "url" and vs in ("url", "astra", "multicast"):
             asrc = "src. ! queue max-size-time=3000000000"
         elif a == "wasapi" or (WIN and a in ("alsa", "pulse")):
             d = c.get("audio_dev", "")
@@ -445,7 +457,10 @@ def devices_win():
             v.append({"dev": gst_unesc(mv.group(1)), "name": name})
         elif cls.startswith("Audio") and ma and "loopback" not in blk.lower():
             a.append({"dev": gst_unesc(ma.group(1)), "name": name})
-    r = {"video": v, "audio": a, "gpu": True, "platform": "win",
+    try:
+        import psutil; ifs = sorted(psutil.net_if_addrs())
+    except Exception: ifs = []
+    r = {"video": v, "audio": a, "gpu": True, "platform": "win", "ifaces": ifs,
          "encoders": {k: x[0] for k, x in ENCODERS.items()}}
     _devcache.update(t=time.time(), v=r)
     return r
@@ -464,6 +479,7 @@ def devices():
     gpu = os.path.exists("/dev/dri/renderD128")
     return {"video": v, "audio": a, "gpu": gpu, "platform": "linux",
             "decklink": sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*")),
+            "ifaces": sorted(n for n in os.listdir("/sys/class/net") if n != "lo") if os.path.isdir("/sys/class/net") else [],
             "encoders": {k: v[0] for k, v in ENCODERS.items()}}
 
 E = None
@@ -633,23 +649,33 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
   </div></div>
   <div class="card"><h2>Encoder</h2><div class="grid">
    <label>Sursă video<select id="video_src">
-     <option value="test">Test pattern</option><option value="mjpeg">Captură HDMI USB (MJPEG)</option>
-     <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option>
-     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option>
-     <option value="decklink" class="lnx">Blackmagic DeckLink (SDI/HDMI)</option></select></label>
+     <optgroup label="Intrare video">
+      <option value="mjpeg">HDMI — placă captură USB (MJPEG)</option>
+      <option value="yuy2">HDMI — placă captură USB (YUY2 / CamLink)</option>
+      <option value="auto">HDMI — placă captură (auto-detect)</option>
+      <option value="decklink" class="lnx">SDI / HDMI — Blackmagic DeckLink</option></optgroup>
+     <optgroup label="Rețea">
+      <option value="multicast">Multicast UDP / RTP</option>
+      <option value="astra">Link HTTP (Astra / nTs-relay / udpxy)</option>
+      <option value="url">Link RTSP / SRT / RTMP / HLS</option></optgroup>
+     <optgroup label="Altele"><option value="test">Test pattern</option></optgroup></select></label>
+   <label class="mcbox">Grup multicast<input id="mc_group" placeholder="239.255.1.1"></label>
+   <label class="mcbox">Port<input id="mc_port" type="number"></label>
+   <label class="mcbox">Protocol<select id="mc_proto"><option value="udp">UDP (MPEG-TS)</option><option value="rtp">RTP (MPEG-TS)</option></select></label>
+   <label class="mcbox">Placă rețea<select id="mc_iface"><option value="">automat</option></select></label>
    <label class="dlbox">DeckLink placa<select id="dl_device"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
    <label class="dlbox">DeckLink mod<select id="dl_mode"><option>auto</option><option>1080i50</option><option>1080p25</option><option>1080p50</option><option>720p50</option><option>pal</option><option>1080i5994</option><option>1080p30</option></select></label>
    <label class="dlbox">DeckLink intrare<select id="dl_conn"><option>auto</option><option>sdi</option><option>hdmi</option></select></label>
    <label id="urlbox" style="grid-column:1/-1">Link sursă<input id="input_url" placeholder="rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101  ·  srt://ip:9000  ·  rtmp://server/live/cheie  ·  udp://@239.1.1.1:1234  ·  http://.../index.m3u8"></label>
-   <label>Dispozitiv video<select id="video_dev"></select></label>
+   <label class="capbox">Dispozitiv video<select id="video_dev"></select></label>
    <label>Encoder<select id="encoder"></select></label>
    <label>Rezoluție<select id="res"><option>1920x1080</option><option>1280x720</option><option>3840x2160</option><option>720x576</option></select></label>
    <label>FPS<select id="fps"><option>25</option><option>30</option><option>50</option><option>60</option></select></label>
    <label>GOP (sec)<input id="gop_sec" type="number"></label>
    <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
    <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
-   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="decklink" class="lnx">DeckLink (embedded)</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
-   <label>Dispozitiv audio<select id="audio_dev"></select></label>
+   <label>Sursă audio<select id="audio_src"><option value="url">Din flux (link / multicast)</option><option value="decklink" class="lnx">DeckLink (embedded)</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label class="adevbox">Dispozitiv audio<select id="audio_dev"></select></label>
    <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
    <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
   </div>
@@ -699,22 +725,27 @@ async function load(){
  const al=W?[{dev:'',name:'Implicit Windows'}].concat(d.audio):(d.audio.length?d.audio:[{dev:'hw:1,0',name:'(niciunul detectat)'}]);
  $('video_dev').innerHTML=vl.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('audio_dev').innerHTML=al.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
+ $('mc_iface').innerHTML='<option value="">automat</option>'+(d.ifaces||[]).map(i=>`<option>${E(i)}</option>`).join('');$('mc_iface').value=c.mc_iface||'';
  $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
- ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','dl_device','dl_mode','dl_conn','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
+ ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','dl_device','dl_mode','dl_conn','mc_group','mc_port','mc_proto','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
  $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;
 }
-function srcUI(user){const u=$('video_src').value=='url';$('urlbox').style.display=u?'':'none';
+function audUI(){document.querySelectorAll('.adevbox').forEach(e=>e.style.display=['alsa','wasapi'].includes($('audio_src').value)?'':'none')}
+function srcUI(user){const vsv=$('video_src').value,u=vsv=='url'||vsv=='astra',net=u||vsv=='multicast';
+ $('urlbox').style.display=u?'':'none';document.querySelectorAll('.capbox').forEach(e=>e.style.display=['mjpeg','yuy2','auto'].includes(vsv)?'':'none');document.querySelectorAll('.mcbox').forEach(e=>e.style.display=vsv=='multicast'?'':'none');
+ $('input_url').placeholder=vsv=='astra'?'http://netstreaming.eu:4000/M9TV   ·   http://IP:8000/canal   ·   http://IP:4022/udp/239.1.1.1:1234':
+  'rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101  ·  srt://ip:9000  ·  rtmp://server/live/cheie  ·  http://.../index.m3u8';
  const dk=$('video_src').value=='decklink';document.querySelectorAll('.dlbox').forEach(e=>e.style.display=dk?'':'none');
  if(dk&&user&&['test','alsa','url'].includes($('audio_src').value))$('audio_src').value='decklink';
- const a=$('audio_src');[...a.options].find(o=>o.value=='url').disabled=!u;if(u&&user&&a.value=='test')a.value='url';if(!u&&a.value=='url')a.value='test'}
+ const a=$('audio_src');[...a.options].find(o=>o.value=='url').disabled=!net;if(net&&user&&a.value=='test')a.value='url';if(!net&&a.value=='url')a.value='test'}
 async function save(){
- const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass','dl_mode','dl_conn'].forEach(k=>b[k]=$(k).value);b.dl_device=+$('dl_device').value;
+ const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass','dl_mode','dl_conn','mc_group','mc_proto','mc_iface'].forEach(k=>b[k]=$(k).value);b.dl_device=+$('dl_device').value;b.mc_port=+$('mc_port').value;
  ['rx_port','latency','fps','gop_sec','min_kbps','max_kbps','audio_kbps','av_delay'].forEach(k=>b[k]=+$(k).value);
  const [w,h]=$('res').value.split('x');b.width=+w;b.height=+h;b.autostart=$('autostart').checked;
  const r=await api('/api/config',b);$('msg').textContent=r.restarted?'Salvat – transmisia a repornit':'Salvat';setTimeout(()=>$('msg').textContent='',3000);$('web_pass').value='';
 }
-$('video_src').onchange=()=>srcUI(true);
-load().then(()=>srcUI(false));tick();setInterval(tick,1000);
+$('video_src').onchange=()=>{srcUI(true);audUI()};$('audio_src').onchange=audUI;
+load().then(()=>{srcUI(false);audUI()});tick();setInterval(tick,1000);
 </script></body></html>
 '@
   Put "$Dir\src\belacoder_port.c" @'

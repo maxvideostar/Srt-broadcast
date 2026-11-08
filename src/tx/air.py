@@ -32,6 +32,7 @@ DEFAULT = {
     "audio_kbps": 128, "av_delay": 0,
     "auto_links": True, "disabled_links": [], "autostart": False,
     "dl_device": 0, "dl_mode": "auto", "dl_conn": "auto",
+    "mc_group": "239.255.1.1", "mc_port": 1234, "mc_proto": "udp", "mc_iface": "",
 }
 
 def load_conf():
@@ -102,8 +103,19 @@ def build_pipeline(c):
         v = (f"decklinkvideosrc {dl} mode={c.get('dl_mode', 'auto')} connection={c.get('dl_conn', 'auto')} ! "
              f"queue ! videoconvert ! deinterlace method=linear ! videoconvert ! videoscale ! videorate ! "
              f"video/x-raw,width={w},height={h},framerate={fps}/1")
-    elif vs == "url":
+    elif vs in ("url", "astra"):
         v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
+             f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
+    elif vs == "multicast":
+        grp = re.sub(r"[^0-9a-fA-F.:]", "", str(c.get("mc_group", "")))
+        port = int(c.get("mc_port", 1234))
+        iface = re.sub(r"[^\w.\- ]", "", str(c.get("mc_iface", "")))
+        us = f"udpsrc uri=udp://{grp}:{port} buffer-size=8388608" + (f" multicast-iface={gst_q(iface)}" if iface else "")
+        if c.get("mc_proto") == "rtp":
+            us += (' caps="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)MP2T,payload=(int)33"'
+                   " ! rtpjitterbuffer latency=200 ! rtpmp2tdepay")
+        v = (f"{us} ! queue max-size-time=3000000000 ! decodebin name=src "
              f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
              f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "auto":
@@ -123,7 +135,7 @@ def build_pipeline(c):
     if a != "none":
         if a == "decklink":
             asrc = f"decklinkaudiosrc device-number={int(c.get('dl_device', 0))} channels=2"
-        elif a == "url" and vs == "url":
+        elif a == "url" and vs in ("url", "astra", "multicast"):
             asrc = "src. ! queue max-size-time=3000000000"
         elif a == "wasapi" or (WIN and a in ("alsa", "pulse")):
             d = c.get("audio_dev", "")
@@ -414,7 +426,10 @@ def devices_win():
             v.append({"dev": gst_unesc(mv.group(1)), "name": name})
         elif cls.startswith("Audio") and ma and "loopback" not in blk.lower():
             a.append({"dev": gst_unesc(ma.group(1)), "name": name})
-    r = {"video": v, "audio": a, "gpu": True, "platform": "win",
+    try:
+        import psutil; ifs = sorted(psutil.net_if_addrs())
+    except Exception: ifs = []
+    r = {"video": v, "audio": a, "gpu": True, "platform": "win", "ifaces": ifs,
          "encoders": {k: x[0] for k, x in ENCODERS.items()}}
     _devcache.update(t=time.time(), v=r)
     return r
@@ -433,6 +448,7 @@ def devices():
     gpu = os.path.exists("/dev/dri/renderD128")
     return {"video": v, "audio": a, "gpu": gpu, "platform": "linux",
             "decklink": sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*")),
+            "ifaces": sorted(n for n in os.listdir("/sys/class/net") if n != "lo") if os.path.isdir("/sys/class/net") else [],
             "encoders": {k: v[0] for k, v in ENCODERS.items()}}
 
 E = None
