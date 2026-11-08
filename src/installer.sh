@@ -23,6 +23,33 @@ fetch(){ # fetch <repo> <dir> [--recursive]
   rm -rf "$2"; git clone -q --depth 1 $3 "https://github.com/$1" "$2"
 }
 
+# Driver Blackmagic Desktop Video (necesar pentru DeckLink). Blackmagic nu permite descarcare automata:
+# pune arhiva Blackmagic_Desktop_Video_Linux_*.tar.gz (sau desktopvideo_*.deb) langa script.
+install_decklink(){
+  [ -e /usr/lib/libDeckLinkAPI.so ] && { say "DeckLink: driver deja instalat ($(ls /dev/blackmagic 2>/dev/null | wc -l) dispozitive)"; return 0; }
+  local here pkg tmp tgz
+  here="$(cd "$(dirname "$0")" && pwd)"
+  pkg=$(ls "$here"/desktopvideo_*_amd64.deb "$PWD"/desktopvideo_*_amd64.deb 2>/dev/null | head -1)
+  if [ -z "$pkg" ]; then
+    tgz=$(ls "$here"/Blackmagic_Desktop_Video_Linux_*.tar* "$PWD"/Blackmagic_Desktop_Video_Linux_*.tar* 2>/dev/null | head -1)
+    if [ -n "$tgz" ]; then
+      tmp=$(mktemp -d); tar -xf "$tgz" -C "$tmp"
+      pkg=$(find "$tmp" -name 'desktopvideo_*_amd64.deb' | head -1)
+    fi
+  fi
+  if [ -z "$pkg" ]; then
+    warn "DeckLink: driverul Desktop Video lipseste. Descarca 'Desktop Video ... Linux' de pe"
+    warn "  https://www.blackmagicdesign.com/support/family/capture-and-playback"
+    warn "  pune arhiva .tar.gz langa nts-air.sh si ruleaza: sudo bash nts-air.sh decklink"
+    return 0
+  fi
+  say "DeckLink: instalez $(basename "$pkg")"
+  apt-get install -y -qq dkms "linux-headers-$(uname -r)" >/dev/null 2>&1 || apt-get install -y -qq dkms linux-headers-generic
+  apt-get install -y -qq "$pkg"
+  modprobe blackmagic-io 2>/dev/null || modprobe blackmagic 2>/dev/null || true
+  say "DeckLink: $(ls /dev/blackmagic 2>/dev/null | wc -l) dispozitive. Daca cere firmware nou: sudo BlackmagicFirmwareUpdater update 0 apoi restart."
+}
+
 install_tx(){
   say "Pachete (GStreamer, VA-API Intel, build tools)"
   apt-get update -qq
@@ -46,6 +73,7 @@ install_tx(){
   fetch BELABOX/srtla $SRC/srtla
   make -C $SRC/srtla -j"$(nproc)" >/dev/null
   install -m755 $SRC/belacoder/belacoder $SRC/srtla/srtla_send $BASE/bin/
+  lspci 2>/dev/null | grep -qi blackmagic && install_decklink
 
   say "Panou web"
   write_app
@@ -89,6 +117,8 @@ install_rx(){
   apt-get update -qq
   apt-get install -y -qq build-essential git cmake tclsh libssl-dev pkg-config python3 ffmpeg mpv
   apt-get install -y -qq mesa-va-drivers intel-media-va-driver vainfo 2>/dev/null || true   # decodare HW pentru iesirea HDMI
+  apt-get install -y -qq gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-vaapi 2>/dev/null || true       # iesire DeckLink
   mkdir -p $SRC $BASE/bin $ETC
   say "Compilez SRT patch-uit BELABOX (srt-live-transmit, static)"
   fetch BELABOX/srt $SRC/srt
@@ -100,6 +130,7 @@ install_rx(){
   fetch BELABOX/srtla $SRC/srtla
   make -C $SRC/srtla -j"$(nproc)" >/dev/null
   install -m755 $SRC/srtla/srtla_rec $BASE/bin/
+  lspci 2>/dev/null | grep -qi blackmagic && install_decklink
 
   say "Panou receiver"
   write_rx

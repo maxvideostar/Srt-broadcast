@@ -18,9 +18,10 @@ emb(){ # emb <dest> <file> <marker>
 case "$1" in
   tx) install_tx ;;
   rx) install_rx ;;
+  decklink) install_decklink ;;
   status) status ;;
   uninstall) uninstall ;;
-  *) echo "Folosire: sudo bash $0 tx|rx|status|uninstall"; exit 1 ;;
+  *) echo "Folosire: sudo bash $0 tx|rx|decklink|status|uninstall"; exit 1 ;;
 esac
 X
 } > nts-air.sh

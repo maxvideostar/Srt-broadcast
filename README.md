@@ -46,6 +46,11 @@ Dezinstalare: `.\nts-air-win.ps1 -Uninstall`.
 - Bonding: SRTLA. Interfețele cu IP sunt detectate automat. Rutarea pe sursă (o tabelă pentru fiecare legătură) se face automat, iar orice legătură se poate dezactiva din panou.
 - Dacă encoderul sau o legătură cade, pornesc automat din nou. Transmisia poate porni singură la boot.
 
+### Blackmagic DeckLink
+
+Pe emițător, DeckLink e sursă video și audio: SDI sau HDMI, cu mod `auto` sau fix, deinterlace automat. Pe receptor e ieșire SDI/HDMI.
+Driverul Desktop Video nu se poate descărca automat, pentru că Blackmagic cere un formular. Îl descarci de pe [blackmagicdesign.com/support](https://www.blackmagicdesign.com/support/family/capture-and-playback), pui arhiva `.tar.gz` lângă `nts-air.sh` și rulezi `sudo bash nts-air.sh decklink`. Dacă placa e detectată în `lspci`, instalarea tx/rx încearcă singură acest pas.
+
 ## Receiver (`rx`)
 
 Panou în stil StreamHub, cu mai multe canale. Fiecare canal are propriul port UDP SRTLA, deci poți avea câte un transmițător pe fiecare canal.
@@ -61,6 +66,7 @@ Panou în stil StreamHub, cu mai multe canale. Fiecare canal are propriul port U
   - `http://0.0.0.0:8000/cale`: HTTP-TS pe un port separat, ca output-ul `http` din Astra. Mai multe canale pot folosi același port, cu căi diferite.
   - `rtp://239.x.x.x:port?ttl=4`: multicast RTP (MP2T, PT 33), pe lângă multicast UDP simplu.
   - `hdmi://?connector=HDMI-A-1&audio=alsa/hdmi:CARD=PCH,DEV=0`: decodare pe ecranul serverului (mpv pe DRM/KMS, accelerare hardware), ca un decoder StreamHub. Merge doar pe un server fizic fără desktop pornit. Ecranele conectate apar în fereastra de editare a canalului.
+  - `decklink://?device=0&mode=1080i50`: ieșire SDI/HDMI pe o placă Blackmagic DeckLink (moduri 1080i50, 1080p25, 1080p50, 720p50, pal; `&audio=0` fără sunet).
   - În fereastra canalului ai butoane gata făcute pentru fiecare tip de ieșire.
 - Configurația se păstrează în `/etc/nts-air/rx.json`.
 
