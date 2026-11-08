@@ -36,6 +36,7 @@ install_tx(){
     gstreamer1.0-pulseaudio vainfo
   apt-get install -y -qq libsrt-openssl-dev 2>/dev/null || apt-get install -y -qq libsrt-dev
   apt-get install -y -qq intel-media-va-driver-non-free 2>/dev/null || apt-get install -y -qq intel-media-va-driver 2>/dev/null || true
+  apt-get install -y -qq mesa-va-drivers 2>/dev/null || true   # AMD (ex. Futro S930 / GX-424CC: VCE H.264)
   apt-get install -y -qq i965-va-driver gstreamer1.0-vaapi 2>/dev/null || true
 
   say "Compilez belacoder (encoder cu bitrate adaptiv) si srtla_send (bonding)"
@@ -78,7 +79,7 @@ U
   command -v ufw >/dev/null && ufw status | grep -q active && ufw allow ${WEB_PORT:-8080}/tcp >/dev/null || true
   IP=$(hostname -I | awk '{print $1}')
   echo; say "GATA. Panou: http://$IP:${WEB_PORT:-8080}  (user admin / parola admin - schimb-o din panou)"
-  echo "    GPU Intel: $( [ -e /dev/dri/renderD128 ] && echo da || echo NU - se foloseste x264 )"
+  echo "    Encoder implicit: $(python3 -c "import json;print(json.load(open('$ETC/tx.json')).get('encoder'))")  (GPU: $(vainfo 2>/dev/null | grep -o 'Driver version: .*' | head -1))"
   echo "    Conecteaza modemuri 4G USB / telefoane cu USB tethering / WiFi / LAN - apar automat in panou."
 }
 
@@ -87,6 +88,7 @@ install_rx(){
   say "Pachete build + ffmpeg"
   apt-get update -qq
   apt-get install -y -qq build-essential git cmake tclsh libssl-dev pkg-config python3 ffmpeg mpv
+  apt-get install -y -qq mesa-va-drivers intel-media-va-driver vainfo 2>/dev/null || true   # decodare HW pentru iesirea HDMI
   mkdir -p $SRC $BASE/bin $ETC
   say "Compilez SRT patch-uit BELABOX (srt-live-transmit, static)"
   fetch BELABOX/srt $SRC/srt
@@ -219,8 +221,8 @@ ENCODERS_WIN = {
 }
 ENCODERS = {
     "x264":      ("x264 (CPU)", "x264enc name=venc_kbps speed-preset=superfast tune=zerolatency bitrate={kb} key-int-max={gop} ! video/x-h264,profile=high", "h264parse"),
-    "va_h264":   ("Intel H.264 (VA)", "vah264enc name=venc_kbps rate-control=cbr bitrate={kb} key-int-max={gop} b-frames=0 target-usage=4", "h264parse"),
-    "va_h265":   ("Intel HEVC (VA)", "vah265enc name=venc_kbps rate-control=cbr bitrate={kb} key-int-max={gop} b-frames=0 target-usage=4", "h265parse"),
+    "va_h264":   ("H.264 GPU (VA-API: Intel / AMD)", "vah264enc name=venc_kbps rate-control=cbr bitrate={kb} key-int-max={gop} b-frames=0 target-usage=4", "h264parse"),
+    "va_h265":   ("HEVC GPU (VA-API, nu pe AMD vechi)", "vah265enc name=venc_kbps rate-control=cbr bitrate={kb} key-int-max={gop} b-frames=0 target-usage=4", "h265parse"),
     "vaapi_h264":("Intel H.264 (VAAPI vechi)", "vaapih264enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h264parse"),
     "vaapi_h265":("Intel HEVC (VAAPI vechi)", "vaapih265enc name=venc_kbps rate-control=cbr bitrate={kb} keyframe-period={gop}", "h265parse"),
 }
