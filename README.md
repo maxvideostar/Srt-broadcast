@@ -58,7 +58,8 @@ Panou în stil StreamHub, cu mai multe canale. Fiecare canal are propriul port U
 - Afișează starea (ON AIR / AȘTEAPTĂ), uptime, bitrate cu grafic pe 2 minute, preview la fiecare 10 secunde, codec, rezoluție și audio.
 - **Legăturile bonded** apar separat: IP:port, Mbps, procentul din total și operatorul (Orange / Vodafone / Digi / Telekom, după reverse DNS).
 - Statistici SRT: RTT, pachete pierdute și aruncate (drop) în ultimele 10 secunde.
-- Ieșiri:
+- Ieșiri: le alegi din formularul canalului (tip din listă + câmpuri), sau ca text în secțiunea „Avansat”.
+  - **Port Astra global** (butonul „Port Astra”, implicit 8000): fiecare canal e automat la `http://IP:8000/NUME`, ca la Astra. 0 = oprit.
   - HTTP-TS mereu activ: `http://server:8090/live/NUME.ts` sau `http://server:8090/NUME`, cu lista clienților conectați.
   - `udp://IP:port` pentru unicast sau multicast (`?ttl=4&localaddr=IP`).
   - `srt://...` ca listener sau caller.

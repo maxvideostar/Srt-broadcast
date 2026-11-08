@@ -896,7 +896,7 @@ SRTLA_REC = BASE + "/bin/srtla_rec"
 SLT = BASE + "/bin/srt-live-transmit"
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 
-DEFAULT = {"web_port": 8090, "web_user": "admin", "web_pass": "admin", "channels": []}
+DEFAULT = {"web_port": 8090, "web_user": "admin", "web_pass": "admin", "astra_port": 8000, "channels": []}
 CH_DEFAULT = {"name": "cam1", "srtla_port": 5000, "latency": 2000, "lossmaxttl": 40,
               "outputs": [], "enabled": True}
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
@@ -1254,6 +1254,11 @@ class Channel:
                 hs = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.helpers.append({"url": url, "proc": Proc("out%d" % k, cmd, None, self.L),
                                      "sock": hs, "addr": ("127.0.0.1", hp)})
+        ap = int(self.hub.conf.get("astra_port", 0) or 0)
+        if ap > 0:   # link Astra automat: http://IP:astra_port/NUME
+            key = ("0.0.0.0", ap, "/" + c["name"])
+            ok = self.hub.httpouts.add(key[0], ap, key[2], self)
+            self.http_out.append({"url": f"http://0.0.0.0:{ap}/{c['name']}", "key": key, "ok": ok, "auto": True})
         for p in self.procs: p.start()
         for h in self.helpers: h["proc"].start()
         self.rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1374,7 +1379,7 @@ class Channel:
                 "clients": [{"ip": v["ip"], "since": int(t - v["t"]), "ua": v["ua"][:60], "drop": v["drop"]}
                             for v in list(self.clients.values()) if not v.get("internal")],
                 "out_status": [{"url": o["url"], "ok": True} for o in self.udp_out] +
-                              [{"url": o["url"], "ok": o["ok"], "http": True,
+                              [{"url": o["url"], "ok": o["ok"], "http": True, "auto": o.get("auto", False),
                                 "port": o["key"][1], "path": o["key"][2]} for o in self.http_out] +
                               [{"url": h["url"], "ok": h["proc"].alive()} for h in self.helpers],
                 "log": list(self.log)[-40:]}
@@ -1425,6 +1430,9 @@ class Hub:
                 if hp == int(self.conf["web_port"]):
                     return f"Portul {hp} e al panoului (acolo /live/NUME.ts e deja activ) - alege alt port"
                 path = u.path if u.path not in ("", "/") else "/" + name
+                ap = int(self.conf.get("astra_port", 0) or 0)
+                if hp == ap and path != "/" + name and any(path == "/" + c.cfg["name"] for c in self.chans.values() if c.id != cur_id):
+                    return f"Calea {path} pe portul Astra {ap} e linkul automat al altui canal"
                 for c in self.chans.values():
                     if c.id == cur_id: continue
                     for o2 in c.cfg.get("outputs", []):
@@ -1486,6 +1494,7 @@ class Hub:
         try: load = os.getloadavg()[0]
         except Exception: load = 0
         return {"channels": chs, "total_mbps": round(sum(c["mbps"] for c in chs), 2),
+                "astra_port": int(self.conf.get("astra_port", 0) or 0), "dl_modes": list(DL_MODES),
                 "onair": sum(1 for c in chs if c["state"] == "ON AIR"), "load": round(load, 2),
                 "ncpu": os.cpu_count(), "uptime": int(now() - self.t0), "sniffer": self.sniff.ok,
                 "host": socket.gethostname()}
@@ -1551,6 +1560,16 @@ class H(BaseHTTPRequestHandler):
                 e = H_.update(cid, b); return self.out(400 if e else 200, {"err": e} if e else {"ok": 1})
             if act == "delete": H_.delete(cid)
             if act == "restart": H_.restart(cid)
+            return self.out(200, {"ok": 1})
+        if p == "/api/settings":
+            try: ap = int(b.get("astra_port", H_.conf.get("astra_port", 8000)))
+            except Exception: return self.out(400, {"err": "Port invalid"})
+            if ap and not (1024 <= ap <= 65535): return self.out(400, {"err": "Portul trebuie intre 1024 si 65535 (0 = oprit)"})
+            if ap == int(H_.conf["web_port"]): return self.out(400, {"err": "Port ocupat de panou"})
+            if ap and any(int(c.cfg["srtla_port"]) == ap for c in H_.chans.values()):
+                return self.out(400, {"err": "Port folosit ca SRTLA de un canal"})
+            H_.conf["astra_port"] = ap; save_conf(H_.conf)
+            for cid in list(H_.chans): H_.restart(cid)
             return self.out(200, {"ok": 1})
         if p == "/api/password":
             pw = str(b.get("pass", ""))
@@ -1628,6 +1647,10 @@ dialog label{display:block;font-size:12px;color:var(--mut);margin-top:10px}
 dialog input,dialog textarea{width:100%;margin-top:3px;background:#0e1115;border:1px solid var(--line);color:var(--tx);padding:8px;border-radius:7px;font:inherit}
 dialog textarea{font:12px ui-monospace,monospace;height:110px}
 .row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.orow{display:grid;grid-template-columns:150px 1fr auto;gap:8px;align-items:end;background:#0f1217;border:1px solid var(--line);border-radius:9px;padding:8px;margin-top:8px}
+.orow .ty{font-size:12px;font-weight:700;align-self:center}.orow .fl{display:flex;flex-wrap:wrap;gap:6px}
+.orow .fl label{margin:0;flex:1;min-width:90px}.orow .fl input,.orow .fl select{padding:6px;font-size:12px;width:100%;margin-top:2px;background:#0b0d10;border:1px solid var(--line);color:var(--tx);border-radius:6px}
+@media(max-width:520px){.orow{grid-template-columns:1fr}}
 .tpl{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.tpl button{font-size:12px;padding:5px 9px}
 .err{color:var(--red);font-size:13px;min-height:18px;margin-top:8px}
 .help{font-size:11px;color:var(--mut);margin-top:4px;line-height:1.5}
@@ -1639,6 +1662,7 @@ dialog textarea{font:12px ui-monospace,monospace;height:110px}
   <div>Load<b id="k_load">-</b></div><div>Server<b id="k_host">-</b></div>
  </div>
  <div class="sp"></div>
+ <button onclick="settings()">Port Astra</button>
  <button onclick="pw()">Parolă</button>
  <button class="p" onclick="edit()">+ Canal</button>
 </header>
@@ -1652,22 +1676,26 @@ dialog textarea{font:12px ui-monospace,monospace;height:110px}
   <label>Latență (ms)<input id="f_lat" type="number" value="2000"></label>
   <label>lossmaxttl<input id="f_ttl" type="number" value="40"></label>
  </div>
- <div class="tpl" id="tpl">
-  <button type="button" onclick="addOut('http')">+ HTTP (Astra)</button>
-  <button type="button" onclick="addOut('udp')">+ Multicast UDP</button>
-  <button type="button" onclick="addOut('rtp')">+ Multicast RTP</button>
-  <button type="button" onclick="addOut('srt')">+ SRT</button>
-  <button type="button" onclick="addOut('rtmp')">+ RTMP</button>
-  <button type="button" onclick="addOut('hdmi')">+ HDMI</button>
-  <button type="button" onclick="addOut('decklink')">+ DeckLink SDI/HDMI</button>
+ <h4 style="margin-top:14px">Ieșiri</h4>
+ <div class="help" id="astrainfo"></div>
+ <div id="outs"></div>
+ <div class="tpl">
+  <select id="newtype" style="flex:1;min-width:180px">
+   <option value="hdmi">Ecran HDMI / DisplayPort (placa video)</option>
+   <option value="decklink">SDI / HDMI — Blackmagic DeckLink</option>
+   <option value="http">HTTP (stil Astra) — port/cale proprie</option>
+   <option value="udp">Multicast / unicast UDP</option>
+   <option value="rtp">Multicast / unicast RTP</option>
+   <option value="srt">SRT</option>
+   <option value="rtmp">RTMP</option>
+  </select>
+  <button type="button" class="p" onclick="addRow($('newtype').value)">+ Adaugă ieșire</button>
  </div>
- <label>Ieșiri (câte una pe linie, max 8)<textarea id="f_out" placeholder="udp://127.0.0.1:5010&#10;udp://239.1.1.10:1234?ttl=4&#10;srt://0.0.0.0:6001?mode=listener&#10;rtmp://localhost/live/cam1"></textarea></label>
- <div class="help">HTTP-TS e mereu activ: <b>http://server:PORT/live/NUME.ts</b> și <b>/NUME</b>.<br>
-  <b>http://0.0.0.0:8000/cale</b> = HTTP-TS pe port separat, ca la Astra (mai multe canale pot folosi același port cu căi diferite)<br>
-  <b>udp://</b> / <b>rtp://</b> unicast sau multicast (?ttl=4&amp;localaddr=IP-placa) · <b>srt://</b> listener/caller · <b>rtmp://</b> (doar H.264)<br>
-  <b>hdmi://</b> = decodare pe ecranul serverului (?connector=HDMI-A-1&amp;audio=alsa/hdmi:CARD=PCH,DEV=0) — server fizic, fără desktop pornit
-  <br><b>decklink://?device=0&amp;mode=1080i50</b> = ieșire pe placa Blackmagic (moduri: 1080i50, 1080p25, 1080p50, 720p50, pal; &amp;audio=0 fără sunet)
-  <div id="hdmiinfo" style="margin-top:4px"></div></div>
+ <details style="margin-top:10px"><summary class="mut" style="cursor:pointer">Avansat: ieșiri ca text (URL-uri)</summary>
+  <textarea id="f_out" oninput="fromText()"></textarea>
+  <div class="help">udp:// rtp:// srt:// rtmp:// http://0.0.0.0:PORT/cale hdmi://?connector=… decklink://?device=0&amp;mode=…</div>
+ </details>
+ <div id="hdmiinfo" class="help" style="margin-top:6px"></div>
  <label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" id="f_en" style="width:auto" checked> Activ</label>
  <div class="err" id="ferr"></div>
  <div class="acts" style="justify-content:flex-end"><button onclick="dlg.close()">Anulează</button><button class="p" onclick="saveCh()">Salvează</button></div>
@@ -1706,7 +1734,8 @@ function card(c){
   <div class="outs">
    <div><span class="dot"></span><a onclick="cp('${base}/live/${esc(c.name)}.ts')">${base}/live/${esc(c.name)}.ts</a></div>
    ${c.out_status.map(o=>{const u=o.http?`http://${location.hostname}:${o.port}${o.path}`:'';
-     return `<div><span class="dot ${o.ok?'':'x'}"></span>${o.http?`<a onclick="cp('${esc(u)}')" title="copiază">${esc(u)}</a>`:esc(o.url)}</div>`}).join('')}
+     const lab=o.http?(o.auto?'Astra':'HTTP'):o.url.startsWith('decklink')?'SDI/HDMI':o.url.startsWith('hdmi')?'Ecran':o.url.split(':')[0].toUpperCase();
+     return `<div><span class="dot ${o.ok?'':'x'}"></span><span class="op" style="margin:0 4px 0 0">${lab}</span>${o.http?`<a onclick="cp('${esc(u)}')" title="copiază">${esc(u)}</a>`:esc(o.url)}</div>`}).join('')}
    ${c.clients.length?`<div class="mut">Clienți HTTP: ${c.clients.map(k=>esc(k.ip)+' ('+fmt(k.since)+')').join(', ')}</div>`:''}
   </div>
   <div class="acts"><button onclick="edit(${c.id})">Editează</button><button onclick="act(${c.id},'restart')">Restart</button>
@@ -1730,26 +1759,59 @@ function edit(id){
  $('dt').textContent=c?'Editează '+c.name:'Canal nou';
  const used=S.channels.map(x=>x.srtla_port);let np=5000;while(used.includes(np))np++;
  $('f_name').value=c?c.name:'cam'+(S.channels.length+1);$('f_port').value=c?c.srtla_port:np;
- loadHdmi();$('f_lat').value=c?c.latency:2000;$('f_ttl').value=c?c.lossmaxttl:40;$('f_out').value=c?c.outputs.join('\n'):'';$('f_en').checked=c?c.enabled:true;
+ $('f_lat').value=c?c.latency:2000;$('f_ttl').value=c?c.lossmaxttl:40;ROWS=(c?c.outputs:[]).map(parseOut);
+ $('astrainfo').innerHTML=S.astra_port?`Mereu active: <b>http://${location.hostname}:${S.astra_port}/NUME</b> (Astra) și <b>http://${location.hostname}:${location.port||80}/live/NUME.ts</b>`:`HTTP Astra global oprit · mereu activ: /live/NUME.ts pe portul panoului`;
+ drawRows();loadHdmi();$('f_en').checked=c?c.enabled:true;
  dlg.showModal()}
-let HDMI=[];
-async function loadHdmi(){try{HDMI=await api('/api/hdmi')}catch(e){HDMI=[]}
- let DL=[];try{DL=await api('/api/decklink')}catch(e){}
- $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server';
- $('hdmiinfo').innerHTML+=' · DeckLink: '+(DL.length?DL.length+' placă/plăci':'nedetectat (driver Desktop Video?)')}
-function addOut(t){
- const n=$('f_name').value.trim()||'canal',ta=$('f_out');
- const used=S.channels.length+1;
- const conn=(HDMI.find(x=>x.status=='connected')||{}).connector;
- const v={http:`http://0.0.0.0:8000/${n}`,udp:`udp://239.255.1.${used}:1234?ttl=4`,rtp:`rtp://239.255.1.${used}:1234?ttl=4`,
-  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto',decklink:'decklink://?device=0&mode=1080i50'}[t];
- ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+v}
+let HDMI=[],DL=[],ROWS=[];
+const OT={
+ hdmi:{l:'Ecran HDMI/DP',f:()=>[['connector','Ecran',['auto'].concat(HDMI.map(x=>x.connector))],['audio','Audio ALSA (opțional)','']],
+  b:v=>'hdmi://?connector='+encodeURIComponent(v.connector||'auto')+(v.audio?'&audio='+encodeURIComponent(v.audio):'')},
+ decklink:{l:'SDI/HDMI DeckLink',f:()=>[['device','Placa',['0','1','2','3']],['mode','Mod',S.dl_modes||['1080i50']],['audio','Sunet',['1','0']]],
+  b:v=>`decklink://?device=${v.device||0}&mode=${v.mode||'1080i50'}`+(v.audio=='0'?'&audio=0':'')},
+ http:{l:'HTTP (Astra)',f:()=>[['port','Port','8000'],['path','Cale','/'+($('f_name').value.trim()||'canal')]],
+  b:v=>`http://0.0.0.0:${v.port||8000}${(v.path||'/').startsWith('/')?v.path:'/'+v.path}`},
+ udp:{l:'UDP',f:()=>[['ip','IP / grup multicast','239.255.1.1'],['port','Port','1234'],['ttl','TTL','4'],['iface','IP placă rețea (opț.)','']],
+  b:v=>`udp://${v.ip}:${v.port}?ttl=${v.ttl||4}`+(v.iface?'&localaddr='+v.iface:'')},
+ rtp:{l:'RTP',f:()=>[['ip','IP / grup multicast','239.255.1.1'],['port','Port','1234'],['ttl','TTL','4'],['iface','IP placă rețea (opț.)','']],
+  b:v=>`rtp://${v.ip}:${v.port}?ttl=${v.ttl||4}`+(v.iface?'&localaddr='+v.iface:'')},
+ srt:{l:'SRT',f:()=>[['mode','Mod',['listener','caller']],['host','Host','0.0.0.0'],['port','Port','6001'],['extra','Parametri extra','']],
+  b:v=>`srt://${v.mode=='caller'?v.host:'0.0.0.0'}:${v.port}?mode=${v.mode||'listener'}`+(v.extra?'&'+v.extra.replace(/^[?&]/,''):'')},
+ rtmp:{l:'RTMP',f:()=>[['url','URL RTMP','rtmp://localhost/live/cheie']],b:v=>v.url},
+};
+function parseOut(s){try{
+ const sc=s.split(':')[0];const rest=s.replace(/^(\w+):\/\//,'');const u=new URL('http://'+(/^[?\/]/.test(rest)||rest==''?'x':'')+rest);const q=Object.fromEntries(u.searchParams);
+ if(sc=='hdmi')return{t:'hdmi',v:{connector:q.connector||'auto',audio:q.audio||''}};
+ if(sc=='decklink')return{t:'decklink',v:{device:q.device||'0',mode:q.mode||'1080i50',audio:q.audio||'1'}};
+ if(sc=='http')return{t:'http',v:{port:u.port||'8000',path:decodeURIComponent(u.pathname)}};
+ if(sc=='udp'||sc=='rtp')return{t:sc,v:{ip:u.hostname,port:u.port,ttl:q.ttl||'4',iface:q.localaddr||''}};
+ if(sc=='srt'){const ex=[...u.searchParams].filter(([k])=>k!='mode').map(([k,x])=>k+'='+x).join('&');return{t:'srt',v:{mode:q.mode||'listener',host:u.hostname,port:u.port,extra:ex}}}
+ if(sc.startsWith('rtmp'))return{t:'rtmp',v:{url:s}};}catch(e){}return{t:'rtmp',v:{url:s}}}
+function addRow(t,v){const d={};OT[t].f().forEach(([k,,def])=>d[k]=Array.isArray(def)?def[0]:def);
+ if(t=='udp'||t=='rtp'){const n=ROWS.filter(r=>r.t==t).length+S.channels.length+1;d.ip='239.255.1.'+n}
+ if(t=='hdmi'){const c=HDMI.find(x=>x.status=='connected');if(c)d.connector=c.connector}
+ ROWS.push({t,v:Object.assign(d,v||{})});drawRows()}
+function drawRows(){
+ $('outs').innerHTML=ROWS.map((r,i)=>`<div class="orow"><div class="ty">${OT[r.t].l}</div><div class="fl">${OT[r.t].f().map(([k,lab,def])=>
+  `<label>${lab}${Array.isArray(def)?`<select onchange="setv(${i},'${k}',this.value)">${[...new Set([r.v[k]].concat(def))].filter(x=>x!==undefined).map(o=>`<option ${o==r.v[k]?'selected':''}>${esc(o)}</option>`).join('')}</select>`
+  :`<input value="${esc(r.v[k]??'')}" oninput="setv(${i},'${k}',this.value)">`}</label>`).join('')}</div>
+  <button type="button" class="d" onclick="ROWS.splice(${i},1);drawRows()">✕</button></div>`).join('')||'<div class="mut" style="margin-top:6px">Nicio ieșire extra.</div>';
+ toText()}
+function setv(i,k,x){ROWS[i].v[k]=x;toText()}
+function toText(){$('f_out').value=ROWS.map(r=>OT[r.t].b(r.v)).join('\n')}
+function fromText(){ROWS=$('f_out').value.split('\n').map(x=>x.trim()).filter(Boolean).map(parseOut);
+ $('outs').innerHTML='';const t=$('f_out').value;drawRows();$('f_out').value=t}
+async function loadHdmi(){try{HDMI=await api('/api/hdmi')}catch(e){HDMI=[]}try{DL=await api('/api/decklink')}catch(e){DL=[]}
+ $('hdmiinfo').innerHTML='Ecrane: '+(HDMI.length?HDMI.map(x=>`${esc(x.connector)} <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'niciunul')+
+  ' · DeckLink: '+(DL.length?DL.length+' placă/plăci':'nedetectat (driver Desktop Video?)');drawRows()}
 async function saveCh(){
  const b={name:$('f_name').value.trim(),srtla_port:+$('f_port').value,latency:+$('f_lat').value,lossmaxttl:+$('f_ttl').value,outputs:$('f_out').value,enabled:$('f_en').checked};
  const r=await api(editing?`/api/channel/${editing}/update`:'/api/channel',b);
  if(r.err){$('ferr').textContent=r.err;return}dlg.close();tick()}
 async function act(id,a){await api(`/api/channel/${id}/${a}`,{});tick()}
 function del(id,n){if(confirm('Ștergi canalul '+n+'?'))act(id,'delete')}
+async function settings(){const p=prompt('Port HTTP Astra global (toate canalele: http://IP:PORT/NUME). 0 = oprit',S.astra_port);
+ if(p===null)return;const r=await api('/api/settings',{astra_port:+p});alert(r.err||'Salvat. Canalele au fost repornite.');tick()}
 async function pw(){const p=prompt('Parolă nouă panou:');if(!p)return;const r=await api('/api/password',{pass:p});alert(r.err||'Parola schimbată. Reautentifică-te.')}
 tick();setInterval(tick,1000);
 </script></body></html>

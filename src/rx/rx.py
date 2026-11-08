@@ -11,7 +11,7 @@ SRTLA_REC = BASE + "/bin/srtla_rec"
 SLT = BASE + "/bin/srt-live-transmit"
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 
-DEFAULT = {"web_port": 8090, "web_user": "admin", "web_pass": "admin", "channels": []}
+DEFAULT = {"web_port": 8090, "web_user": "admin", "web_pass": "admin", "astra_port": 8000, "channels": []}
 CH_DEFAULT = {"name": "cam1", "srtla_port": 5000, "latency": 2000, "lossmaxttl": 40,
               "outputs": [], "enabled": True}
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
@@ -369,6 +369,11 @@ class Channel:
                 hs = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.helpers.append({"url": url, "proc": Proc("out%d" % k, cmd, None, self.L),
                                      "sock": hs, "addr": ("127.0.0.1", hp)})
+        ap = int(self.hub.conf.get("astra_port", 0) or 0)
+        if ap > 0:   # link Astra automat: http://IP:astra_port/NUME
+            key = ("0.0.0.0", ap, "/" + c["name"])
+            ok = self.hub.httpouts.add(key[0], ap, key[2], self)
+            self.http_out.append({"url": f"http://0.0.0.0:{ap}/{c['name']}", "key": key, "ok": ok, "auto": True})
         for p in self.procs: p.start()
         for h in self.helpers: h["proc"].start()
         self.rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -489,7 +494,7 @@ class Channel:
                 "clients": [{"ip": v["ip"], "since": int(t - v["t"]), "ua": v["ua"][:60], "drop": v["drop"]}
                             for v in list(self.clients.values()) if not v.get("internal")],
                 "out_status": [{"url": o["url"], "ok": True} for o in self.udp_out] +
-                              [{"url": o["url"], "ok": o["ok"], "http": True,
+                              [{"url": o["url"], "ok": o["ok"], "http": True, "auto": o.get("auto", False),
                                 "port": o["key"][1], "path": o["key"][2]} for o in self.http_out] +
                               [{"url": h["url"], "ok": h["proc"].alive()} for h in self.helpers],
                 "log": list(self.log)[-40:]}
@@ -540,6 +545,9 @@ class Hub:
                 if hp == int(self.conf["web_port"]):
                     return f"Portul {hp} e al panoului (acolo /live/NUME.ts e deja activ) - alege alt port"
                 path = u.path if u.path not in ("", "/") else "/" + name
+                ap = int(self.conf.get("astra_port", 0) or 0)
+                if hp == ap and path != "/" + name and any(path == "/" + c.cfg["name"] for c in self.chans.values() if c.id != cur_id):
+                    return f"Calea {path} pe portul Astra {ap} e linkul automat al altui canal"
                 for c in self.chans.values():
                     if c.id == cur_id: continue
                     for o2 in c.cfg.get("outputs", []):
@@ -601,6 +609,7 @@ class Hub:
         try: load = os.getloadavg()[0]
         except Exception: load = 0
         return {"channels": chs, "total_mbps": round(sum(c["mbps"] for c in chs), 2),
+                "astra_port": int(self.conf.get("astra_port", 0) or 0), "dl_modes": list(DL_MODES),
                 "onair": sum(1 for c in chs if c["state"] == "ON AIR"), "load": round(load, 2),
                 "ncpu": os.cpu_count(), "uptime": int(now() - self.t0), "sniffer": self.sniff.ok,
                 "host": socket.gethostname()}
@@ -666,6 +675,16 @@ class H(BaseHTTPRequestHandler):
                 e = H_.update(cid, b); return self.out(400 if e else 200, {"err": e} if e else {"ok": 1})
             if act == "delete": H_.delete(cid)
             if act == "restart": H_.restart(cid)
+            return self.out(200, {"ok": 1})
+        if p == "/api/settings":
+            try: ap = int(b.get("astra_port", H_.conf.get("astra_port", 8000)))
+            except Exception: return self.out(400, {"err": "Port invalid"})
+            if ap and not (1024 <= ap <= 65535): return self.out(400, {"err": "Portul trebuie intre 1024 si 65535 (0 = oprit)"})
+            if ap == int(H_.conf["web_port"]): return self.out(400, {"err": "Port ocupat de panou"})
+            if ap and any(int(c.cfg["srtla_port"]) == ap for c in H_.chans.values()):
+                return self.out(400, {"err": "Port folosit ca SRTLA de un canal"})
+            H_.conf["astra_port"] = ap; save_conf(H_.conf)
+            for cid in list(H_.chans): H_.restart(cid)
             return self.out(200, {"ok": 1})
         if p == "/api/password":
             pw = str(b.get("pass", ""))
