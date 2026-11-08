@@ -89,7 +89,11 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>Sursă video<select id="video_src">
      <option value="test">Test pattern</option><option value="mjpeg">Captură HDMI USB (MJPEG)</option>
      <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option>
-     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option></select></label>
+     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option>
+     <option value="decklink" class="lnx">Blackmagic DeckLink (SDI/HDMI)</option></select></label>
+   <label class="dlbox">DeckLink placa<select id="dl_device"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+   <label class="dlbox">DeckLink mod<select id="dl_mode"><option>auto</option><option>1080i50</option><option>1080p25</option><option>1080p50</option><option>720p50</option><option>pal</option><option>1080i5994</option><option>1080p30</option></select></label>
+   <label class="dlbox">DeckLink intrare<select id="dl_conn"><option>auto</option><option>sdi</option><option>hdmi</option></select></label>
    <label id="urlbox" style="grid-column:1/-1">Link sursă<input id="input_url" placeholder="rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101  ·  srt://ip:9000  ·  rtmp://server/live/cheie  ·  udp://@239.1.1.1:1234  ·  http://.../index.m3u8"></label>
    <label>Dispozitiv video<select id="video_dev"></select></label>
    <label>Encoder<select id="encoder"></select></label>
@@ -98,7 +102,7 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>GOP (sec)<input id="gop_sec" type="number"></label>
    <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
    <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
-   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="decklink" class="lnx">DeckLink (embedded)</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
    <label>Dispozitiv audio<select id="audio_dev"></select></label>
    <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
    <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
@@ -150,13 +154,15 @@ async function load(){
  $('video_dev').innerHTML=vl.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('audio_dev').innerHTML=al.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
- ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
+ ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','dl_device','dl_mode','dl_conn','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
  $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;
 }
 function srcUI(user){const u=$('video_src').value=='url';$('urlbox').style.display=u?'':'none';
+ const dk=$('video_src').value=='decklink';document.querySelectorAll('.dlbox').forEach(e=>e.style.display=dk?'':'none');
+ if(dk&&user&&['test','alsa','url'].includes($('audio_src').value))$('audio_src').value='decklink';
  const a=$('audio_src');[...a.options].find(o=>o.value=='url').disabled=!u;if(u&&user&&a.value=='test')a.value='url';if(!u&&a.value=='url')a.value='test'}
 async function save(){
- const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass'].forEach(k=>b[k]=$(k).value);
+ const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass','dl_mode','dl_conn'].forEach(k=>b[k]=$(k).value);b.dl_device=+$('dl_device').value;
  ['rx_port','latency','fps','gop_sec','min_kbps','max_kbps','audio_kbps','av_delay'].forEach(k=>b[k]=+$(k).value);
  const [w,h]=$('res').value.split('x');b.width=+w;b.height=+h;b.autostart=$('autostart').checked;
  const r=await api('/api/config',b);$('msg').textContent=r.restarted?'Salvat – transmisia a repornit':'Salvat';setTimeout(()=>$('msg').textContent='',3000);$('web_pass').value='';

@@ -151,6 +151,41 @@ def hdmi_cmd(u, src):
     cmd.append(src)
     return cmd
 
+# ------------------------------------------------------------- DeckLink (Blackmagic) SDI/HDMI out
+GST_LAUNCH = os.environ.get("GST_LAUNCH", "gst-launch-1.0")
+DL_MODES = {  # mod -> (latime, inaltime, fps_num, fps_den, intercalat)
+    "1080i50": (1920, 1080, 25, 1, True), "1080p25": (1920, 1080, 25, 1, False), "1080p50": (1920, 1080, 50, 1, False),
+    "1080i5994": (1920, 1080, 30000, 1001, True), "1080p2997": (1920, 1080, 30000, 1001, False),
+    "1080p30": (1920, 1080, 30, 1, False), "720p50": (1280, 720, 50, 1, False), "720p5994": (1280, 720, 60000, 1001, False),
+    "pal": (720, 576, 25, 1, True), "ntsc": (720, 486, 30000, 1001, True),
+}
+
+def decklink_devices():
+    return sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*"))
+
+def decklink_cmd(u, src):
+    """decklink://?device=0&mode=1080i50&audio=1"""
+    q = {k: v[0] for k, v in parse_qs(u.query).items()}
+    dev_s = str(q.get("device") or u.hostname or "0")
+    dev = int(dev_s) if dev_s.isdigit() else 0
+    mode = q.get("mode", "1080i50")
+    w, h, fn, fd, inter = DL_MODES.get(mode, DL_MODES["1080i50"])
+    fake = q.get("sink") == "fake"
+    vsink = "fakesink sync=true" if fake else f"decklinkvideosink device-number={dev} mode={mode} sync=true"
+    asink = "fakesink sync=true" if fake else f"decklinkaudiosink device-number={dev} sync=true"
+    if inter:   # cadre progresive la 2x fps -> interlace (fiecare cadru = un camp)
+        vchain = (f"videorate ! video/x-raw,framerate={fn*2}/{fd} ! interlace field-pattern=1:1 top-field-first=true ! "
+                  f"videoconvert ! video/x-raw,format=UYVY,width={w},height={h}")
+    else:
+        vchain = f"videorate ! video/x-raw,framerate={fn}/{fd} ! videoconvert ! video/x-raw,format=UYVY,width={w},height={h}"
+    pipe = (f"uridecodebin uri={src} name=d "
+            f"d. ! queue max-size-time=2000000000 ! deinterlace ! videoconvert ! videoscale add-borders=true ! "
+            f"video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! {vchain} ! {vsink} ")
+    if q.get("audio", "1") != "0":
+        pipe += (f"d. ! queue max-size-time=2000000000 ! audioconvert ! audioresample ! "
+                 f"audio/x-raw,format=S32LE,rate=48000,channels=2 ! {asink}")
+    return [GST_LAUNCH, "-q"] + shlex.split(pipe)
+
 # ------------------------------------------------------------- iesiri HTTP stil Astra
 def stream_to_client(h, ch, internal=False):
     """trimite MPEG-TS catre clientul HTTP h (BaseHTTPRequestHandler)"""
@@ -318,13 +353,15 @@ class Channel:
                 path = u.path if u.path not in ("", "/") else "/" + c["name"]
                 ok = self.hub.httpouts.add(u.hostname or "0.0.0.0", u.port or 8000, path, self)
                 self.http_out.append({"url": url, "key": (u.hostname or "0.0.0.0", u.port or 8000, path), "ok": ok})
-            elif u.scheme in ("srt", "rtmp", "rtmps", "hdmi"):
+            elif u.scheme in ("srt", "rtmp", "rtmps", "hdmi", "decklink"):
                 hp = self.p_helper(k + 0) if k < 8 else None
                 if hp is None: continue
                 if u.scheme == "srt":
                     cmd = [SLT, "-a:yes", f"udp://127.0.0.1:{hp}", url]
                 elif u.scheme == "hdmi":
                     cmd = hdmi_cmd(u, f"udp://127.0.0.1:{hp}")
+                elif u.scheme == "decklink":
+                    cmd = decklink_cmd(u, f"udp://127.0.0.1:{hp}")
                 else:
                     cmd = [FFMPEG, "-hide_banner", "-loglevel", "warning", "-fflags", "+genpts",
                            "-f", "mpegts", "-i", f"udp://127.0.0.1:{hp}?fifo_size=1000000&overrun_nonfatal=1",
@@ -496,7 +533,7 @@ class Hub:
             o = o.strip()
             if not o: continue
             u = urlparse(o)
-            if u.scheme not in ("udp", "rtp", "srt", "rtmp", "rtmps", "http", "hdmi"):
+            if u.scheme not in ("udp", "rtp", "srt", "rtmp", "rtmps", "http", "hdmi", "decklink"):
                 return "Ieșire necunoscută: " + o
             if u.scheme == "http":
                 hp = u.port or 8000
@@ -610,6 +647,7 @@ class H(BaseHTTPRequestHandler):
             return self.out(200, html, "text/html; charset=utf-8")
         if p == "/api/status": return self.out(200, H_.status())
         if p == "/api/hdmi": return self.out(200, hdmi_connectors())
+        if p == "/api/decklink": return self.out(200, decklink_devices())
         mt = re.match(r"^/thumb/(\d+)\.jpg$", p)
         if mt:
             try: return self.out(200, open(f"{RUN}/thumb_{int(mt.group(1))}.jpg", "rb").read(), "image/jpeg")

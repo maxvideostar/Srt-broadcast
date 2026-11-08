@@ -31,6 +31,7 @@ DEFAULT = {
     "encoder": "qsv_h264" if WIN else "x264", "audio_src": "test", "audio_dev": "" if WIN else "hw:1,0",
     "audio_kbps": 128, "av_delay": 0,
     "auto_links": True, "disabled_links": [], "autostart": False,
+    "dl_device": 0, "dl_mode": "auto", "dl_conn": "auto",
 }
 
 def load_conf():
@@ -96,6 +97,11 @@ def build_pipeline(c):
         v = f"v4l2src device={dev} do-timestamp=true ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
     elif vs == "yuy2":
         v = f"v4l2src device={dev} do-timestamp=true ! video/x-raw,format=YUY2,width={w},height={h},framerate={fps}/1"
+    elif vs == "decklink":
+        dl = f"device-number={int(c.get('dl_device', 0))}"
+        v = (f"decklinkvideosrc {dl} mode={c.get('dl_mode', 'auto')} connection={c.get('dl_conn', 'auto')} ! "
+             f"queue ! videoconvert ! deinterlace method=linear ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "url":
         v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
              f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
@@ -115,7 +121,9 @@ def build_pipeline(c):
          f"queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040 ! mux. ")
     a = c["audio_src"]
     if a != "none":
-        if a == "url" and vs == "url":
+        if a == "decklink":
+            asrc = f"decklinkaudiosrc device-number={int(c.get('dl_device', 0))} channels=2"
+        elif a == "url" and vs == "url":
             asrc = "src. ! queue max-size-time=3000000000"
         elif a == "wasapi" or (WIN and a in ("alsa", "pulse")):
             d = c.get("audio_dev", "")
@@ -424,6 +432,7 @@ def devices():
         a.append({"dev": f"hw:{m.group(1)},{m.group(3)}", "name": f"{m.group(2).strip()} / {m.group(4).strip()}"})
     gpu = os.path.exists("/dev/dri/renderD128")
     return {"video": v, "audio": a, "gpu": gpu, "platform": "linux",
+            "decklink": sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*")),
             "encoders": {k: v[0] for k, v in ENCODERS.items()}}
 
 E = None

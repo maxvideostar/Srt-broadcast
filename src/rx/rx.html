@@ -83,12 +83,14 @@ dialog textarea{font:12px ui-monospace,monospace;height:110px}
   <button type="button" onclick="addOut('srt')">+ SRT</button>
   <button type="button" onclick="addOut('rtmp')">+ RTMP</button>
   <button type="button" onclick="addOut('hdmi')">+ HDMI</button>
+  <button type="button" onclick="addOut('decklink')">+ DeckLink SDI/HDMI</button>
  </div>
  <label>Ieșiri (câte una pe linie, max 8)<textarea id="f_out" placeholder="udp://127.0.0.1:5010&#10;udp://239.1.1.10:1234?ttl=4&#10;srt://0.0.0.0:6001?mode=listener&#10;rtmp://localhost/live/cam1"></textarea></label>
  <div class="help">HTTP-TS e mereu activ: <b>http://server:PORT/live/NUME.ts</b> și <b>/NUME</b>.<br>
   <b>http://0.0.0.0:8000/cale</b> = HTTP-TS pe port separat, ca la Astra (mai multe canale pot folosi același port cu căi diferite)<br>
   <b>udp://</b> / <b>rtp://</b> unicast sau multicast (?ttl=4&amp;localaddr=IP-placa) · <b>srt://</b> listener/caller · <b>rtmp://</b> (doar H.264)<br>
   <b>hdmi://</b> = decodare pe ecranul serverului (?connector=HDMI-A-1&amp;audio=alsa/hdmi:CARD=PCH,DEV=0) — server fizic, fără desktop pornit
+  <br><b>decklink://?device=0&amp;mode=1080i50</b> = ieșire pe placa Blackmagic (moduri: 1080i50, 1080p25, 1080p50, 720p50, pal; &amp;audio=0 fără sunet)
   <div id="hdmiinfo" style="margin-top:4px"></div></div>
  <label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" id="f_en" style="width:auto" checked> Activ</label>
  <div class="err" id="ferr"></div>
@@ -156,13 +158,15 @@ function edit(id){
  dlg.showModal()}
 let HDMI=[];
 async function loadHdmi(){try{HDMI=await api('/api/hdmi')}catch(e){HDMI=[]}
- $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server'}
+ let DL=[];try{DL=await api('/api/decklink')}catch(e){}
+ $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server';
+ $('hdmiinfo').innerHTML+=' · DeckLink: '+(DL.length?DL.length+' placă/plăci':'nedetectat (driver Desktop Video?)')}
 function addOut(t){
  const n=$('f_name').value.trim()||'canal',ta=$('f_out');
  const used=S.channels.length+1;
  const conn=(HDMI.find(x=>x.status=='connected')||{}).connector;
  const v={http:`http://0.0.0.0:8000/${n}`,udp:`udp://239.255.1.${used}:1234?ttl=4`,rtp:`rtp://239.255.1.${used}:1234?ttl=4`,
-  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto'}[t];
+  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto',decklink:'decklink://?device=0&mode=1080i50'}[t];
  ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+v}
 async function saveCh(){
  const b={name:$('f_name').value.trim(),srtla_port:+$('f_port').value,latency:+$('f_lat').value,lossmaxttl:+$('f_ttl').value,outputs:$('f_out').value,enabled:$('f_en').checked};

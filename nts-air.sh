@@ -192,6 +192,7 @@ DEFAULT = {
     "encoder": "qsv_h264" if WIN else "x264", "audio_src": "test", "audio_dev": "" if WIN else "hw:1,0",
     "audio_kbps": 128, "av_delay": 0,
     "auto_links": True, "disabled_links": [], "autostart": False,
+    "dl_device": 0, "dl_mode": "auto", "dl_conn": "auto",
 }
 
 def load_conf():
@@ -257,6 +258,11 @@ def build_pipeline(c):
         v = f"v4l2src device={dev} do-timestamp=true ! image/jpeg,width={w},height={h},framerate={fps}/1 ! jpegparse ! jpegdec"
     elif vs == "yuy2":
         v = f"v4l2src device={dev} do-timestamp=true ! video/x-raw,format=YUY2,width={w},height={h},framerate={fps}/1"
+    elif vs == "decklink":
+        dl = f"device-number={int(c.get('dl_device', 0))}"
+        v = (f"decklinkvideosrc {dl} mode={c.get('dl_mode', 'auto')} connection={c.get('dl_conn', 'auto')} ! "
+             f"queue ! videoconvert ! deinterlace method=linear ! videoconvert ! videoscale ! videorate ! "
+             f"video/x-raw,width={w},height={h},framerate={fps}/1")
     elif vs == "url":
         v = (f'uridecodebin uri="{norm_url(c.get("input_url"))}" name=src '
              f"src. ! queue max-size-time=3000000000 ! videoconvert ! videoscale ! videorate ! "
@@ -276,7 +282,9 @@ def build_pipeline(c):
          f"queue max-size-time=10000000000 max-size-buffers=1000 max-size-bytes=41943040 ! mux. ")
     a = c["audio_src"]
     if a != "none":
-        if a == "url" and vs == "url":
+        if a == "decklink":
+            asrc = f"decklinkaudiosrc device-number={int(c.get('dl_device', 0))} channels=2"
+        elif a == "url" and vs == "url":
             asrc = "src. ! queue max-size-time=3000000000"
         elif a == "wasapi" or (WIN and a in ("alsa", "pulse")):
             d = c.get("audio_dev", "")
@@ -585,6 +593,7 @@ def devices():
         a.append({"dev": f"hw:{m.group(1)},{m.group(3)}", "name": f"{m.group(2).strip()} / {m.group(4).strip()}"})
     gpu = os.path.exists("/dev/dri/renderD128")
     return {"video": v, "audio": a, "gpu": gpu, "platform": "linux",
+            "decklink": sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*")),
             "encoders": {k: v[0] for k, v in ENCODERS.items()}}
 
 E = None
@@ -756,7 +765,11 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>Sursă video<select id="video_src">
      <option value="test">Test pattern</option><option value="mjpeg">Captură HDMI USB (MJPEG)</option>
      <option value="yuy2">Captură HDMI (YUY2 / CamLink)</option><option value="auto">Captură (auto-detect)</option>
-     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option></select></label>
+     <option value="url">Link rețea (RTSP/SRT/RTMP/UDP/HLS)</option>
+     <option value="decklink" class="lnx">Blackmagic DeckLink (SDI/HDMI)</option></select></label>
+   <label class="dlbox">DeckLink placa<select id="dl_device"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+   <label class="dlbox">DeckLink mod<select id="dl_mode"><option>auto</option><option>1080i50</option><option>1080p25</option><option>1080p50</option><option>720p50</option><option>pal</option><option>1080i5994</option><option>1080p30</option></select></label>
+   <label class="dlbox">DeckLink intrare<select id="dl_conn"><option>auto</option><option>sdi</option><option>hdmi</option></select></label>
    <label id="urlbox" style="grid-column:1/-1">Link sursă<input id="input_url" placeholder="rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101  ·  srt://ip:9000  ·  rtmp://server/live/cheie  ·  udp://@239.1.1.1:1234  ·  http://.../index.m3u8"></label>
    <label>Dispozitiv video<select id="video_dev"></select></label>
    <label>Encoder<select id="encoder"></select></label>
@@ -765,7 +778,7 @@ pre{background:#090b0d;border-radius:8px;padding:10px;max-height:260px;overflow:
    <label>GOP (sec)<input id="gop_sec" type="number"></label>
    <label>Bitrate minim (kbps)<input id="min_kbps" type="number"></label>
    <label>Bitrate maxim (kbps)<input id="max_kbps" type="number"></label>
-   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
+   <label>Sursă audio<select id="audio_src"><option value="url">Din link</option><option value="decklink" class="lnx">DeckLink (embedded)</option><option value="wasapi" class="win">WASAPI (placă captură / microfon)</option><option value="alsa" class="lnx">ALSA (placă captură)</option><option value="pulse" class="lnx">PulseAudio</option><option value="test">Ton test</option><option value="none">Fără audio</option></select></label>
    <label>Dispozitiv audio<select id="audio_dev"></select></label>
    <label>Audio AAC (kbps)<input id="audio_kbps" type="number"></label>
    <label>Decalaj A/V (ms)<input id="av_delay" type="number"></label>
@@ -817,13 +830,15 @@ async function load(){
  $('video_dev').innerHTML=vl.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('audio_dev').innerHTML=al.map(v=>`<option value="${E(v.dev)}">${W?E(v.name):E(v.dev)+' – '+E(v.name)}</option>`).join('');
  $('encoder').innerHTML=Object.entries(d.encoders).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
- ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
+ ['rx_host','rx_port','streamid','latency','video_src','video_dev','input_url','dl_device','dl_mode','dl_conn','encoder','fps','gop_sec','min_kbps','max_kbps','audio_src','audio_dev','audio_kbps','av_delay'].forEach(k=>{if($(k))$(k).value=c[k]});
  $('res').value=c.width+'x'+c.height;$('autostart').checked=!!c.autostart;
 }
 function srcUI(user){const u=$('video_src').value=='url';$('urlbox').style.display=u?'':'none';
+ const dk=$('video_src').value=='decklink';document.querySelectorAll('.dlbox').forEach(e=>e.style.display=dk?'':'none');
+ if(dk&&user&&['test','alsa','url'].includes($('audio_src').value))$('audio_src').value='decklink';
  const a=$('audio_src');[...a.options].find(o=>o.value=='url').disabled=!u;if(u&&user&&a.value=='test')a.value='url';if(!u&&a.value=='url')a.value='test'}
 async function save(){
- const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass'].forEach(k=>b[k]=$(k).value);
+ const b={};['rx_host','streamid','video_src','video_dev','input_url','encoder','audio_src','audio_dev','web_pass','dl_mode','dl_conn'].forEach(k=>b[k]=$(k).value);b.dl_device=+$('dl_device').value;
  ['rx_port','latency','fps','gop_sec','min_kbps','max_kbps','audio_kbps','av_delay'].forEach(k=>b[k]=+$(k).value);
  const [w,h]=$('res').value.split('x');b.width=+w;b.height=+h;b.autostart=$('autostart').checked;
  const r=await api('/api/config',b);$('msg').textContent=r.restarted?'Salvat – transmisia a repornit':'Salvat';setTimeout(()=>$('msg').textContent='',3000);$('web_pass').value='';
@@ -989,6 +1004,41 @@ def hdmi_cmd(u, src):
     if q.get("ao"): cmd.append("--ao=" + q["ao"])
     cmd.append(src)
     return cmd
+
+# ------------------------------------------------------------- DeckLink (Blackmagic) SDI/HDMI out
+GST_LAUNCH = os.environ.get("GST_LAUNCH", "gst-launch-1.0")
+DL_MODES = {  # mod -> (latime, inaltime, fps_num, fps_den, intercalat)
+    "1080i50": (1920, 1080, 25, 1, True), "1080p25": (1920, 1080, 25, 1, False), "1080p50": (1920, 1080, 50, 1, False),
+    "1080i5994": (1920, 1080, 30000, 1001, True), "1080p2997": (1920, 1080, 30000, 1001, False),
+    "1080p30": (1920, 1080, 30, 1, False), "720p50": (1280, 720, 50, 1, False), "720p5994": (1280, 720, 60000, 1001, False),
+    "pal": (720, 576, 25, 1, True), "ntsc": (720, 486, 30000, 1001, True),
+}
+
+def decklink_devices():
+    return sorted(glob.glob("/dev/blackmagic/io*") + glob.glob("/dev/blackmagic/dv*"))
+
+def decklink_cmd(u, src):
+    """decklink://?device=0&mode=1080i50&audio=1"""
+    q = {k: v[0] for k, v in parse_qs(u.query).items()}
+    dev_s = str(q.get("device") or u.hostname or "0")
+    dev = int(dev_s) if dev_s.isdigit() else 0
+    mode = q.get("mode", "1080i50")
+    w, h, fn, fd, inter = DL_MODES.get(mode, DL_MODES["1080i50"])
+    fake = q.get("sink") == "fake"
+    vsink = "fakesink sync=true" if fake else f"decklinkvideosink device-number={dev} mode={mode} sync=true"
+    asink = "fakesink sync=true" if fake else f"decklinkaudiosink device-number={dev} sync=true"
+    if inter:   # cadre progresive la 2x fps -> interlace (fiecare cadru = un camp)
+        vchain = (f"videorate ! video/x-raw,framerate={fn*2}/{fd} ! interlace field-pattern=1:1 top-field-first=true ! "
+                  f"videoconvert ! video/x-raw,format=UYVY,width={w},height={h}")
+    else:
+        vchain = f"videorate ! video/x-raw,framerate={fn}/{fd} ! videoconvert ! video/x-raw,format=UYVY,width={w},height={h}"
+    pipe = (f"uridecodebin uri={src} name=d "
+            f"d. ! queue max-size-time=2000000000 ! deinterlace ! videoconvert ! videoscale add-borders=true ! "
+            f"video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! {vchain} ! {vsink} ")
+    if q.get("audio", "1") != "0":
+        pipe += (f"d. ! queue max-size-time=2000000000 ! audioconvert ! audioresample ! "
+                 f"audio/x-raw,format=S32LE,rate=48000,channels=2 ! {asink}")
+    return [GST_LAUNCH, "-q"] + shlex.split(pipe)
 
 # ------------------------------------------------------------- iesiri HTTP stil Astra
 def stream_to_client(h, ch, internal=False):
@@ -1157,13 +1207,15 @@ class Channel:
                 path = u.path if u.path not in ("", "/") else "/" + c["name"]
                 ok = self.hub.httpouts.add(u.hostname or "0.0.0.0", u.port or 8000, path, self)
                 self.http_out.append({"url": url, "key": (u.hostname or "0.0.0.0", u.port or 8000, path), "ok": ok})
-            elif u.scheme in ("srt", "rtmp", "rtmps", "hdmi"):
+            elif u.scheme in ("srt", "rtmp", "rtmps", "hdmi", "decklink"):
                 hp = self.p_helper(k + 0) if k < 8 else None
                 if hp is None: continue
                 if u.scheme == "srt":
                     cmd = [SLT, "-a:yes", f"udp://127.0.0.1:{hp}", url]
                 elif u.scheme == "hdmi":
                     cmd = hdmi_cmd(u, f"udp://127.0.0.1:{hp}")
+                elif u.scheme == "decklink":
+                    cmd = decklink_cmd(u, f"udp://127.0.0.1:{hp}")
                 else:
                     cmd = [FFMPEG, "-hide_banner", "-loglevel", "warning", "-fflags", "+genpts",
                            "-f", "mpegts", "-i", f"udp://127.0.0.1:{hp}?fifo_size=1000000&overrun_nonfatal=1",
@@ -1335,7 +1387,7 @@ class Hub:
             o = o.strip()
             if not o: continue
             u = urlparse(o)
-            if u.scheme not in ("udp", "rtp", "srt", "rtmp", "rtmps", "http", "hdmi"):
+            if u.scheme not in ("udp", "rtp", "srt", "rtmp", "rtmps", "http", "hdmi", "decklink"):
                 return "Ieșire necunoscută: " + o
             if u.scheme == "http":
                 hp = u.port or 8000
@@ -1449,6 +1501,7 @@ class H(BaseHTTPRequestHandler):
             return self.out(200, html, "text/html; charset=utf-8")
         if p == "/api/status": return self.out(200, H_.status())
         if p == "/api/hdmi": return self.out(200, hdmi_connectors())
+        if p == "/api/decklink": return self.out(200, decklink_devices())
         mt = re.match(r"^/thumb/(\d+)\.jpg$", p)
         if mt:
             try: return self.out(200, open(f"{RUN}/thumb_{int(mt.group(1))}.jpg", "rb").read(), "image/jpeg")
@@ -1575,12 +1628,14 @@ dialog textarea{font:12px ui-monospace,monospace;height:110px}
   <button type="button" onclick="addOut('srt')">+ SRT</button>
   <button type="button" onclick="addOut('rtmp')">+ RTMP</button>
   <button type="button" onclick="addOut('hdmi')">+ HDMI</button>
+  <button type="button" onclick="addOut('decklink')">+ DeckLink SDI/HDMI</button>
  </div>
  <label>Ieșiri (câte una pe linie, max 8)<textarea id="f_out" placeholder="udp://127.0.0.1:5010&#10;udp://239.1.1.10:1234?ttl=4&#10;srt://0.0.0.0:6001?mode=listener&#10;rtmp://localhost/live/cam1"></textarea></label>
  <div class="help">HTTP-TS e mereu activ: <b>http://server:PORT/live/NUME.ts</b> și <b>/NUME</b>.<br>
   <b>http://0.0.0.0:8000/cale</b> = HTTP-TS pe port separat, ca la Astra (mai multe canale pot folosi același port cu căi diferite)<br>
   <b>udp://</b> / <b>rtp://</b> unicast sau multicast (?ttl=4&amp;localaddr=IP-placa) · <b>srt://</b> listener/caller · <b>rtmp://</b> (doar H.264)<br>
   <b>hdmi://</b> = decodare pe ecranul serverului (?connector=HDMI-A-1&amp;audio=alsa/hdmi:CARD=PCH,DEV=0) — server fizic, fără desktop pornit
+  <br><b>decklink://?device=0&amp;mode=1080i50</b> = ieșire pe placa Blackmagic (moduri: 1080i50, 1080p25, 1080p50, 720p50, pal; &amp;audio=0 fără sunet)
   <div id="hdmiinfo" style="margin-top:4px"></div></div>
  <label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" id="f_en" style="width:auto" checked> Activ</label>
  <div class="err" id="ferr"></div>
@@ -1648,13 +1703,15 @@ function edit(id){
  dlg.showModal()}
 let HDMI=[];
 async function loadHdmi(){try{HDMI=await api('/api/hdmi')}catch(e){HDMI=[]}
- $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server'}
+ let DL=[];try{DL=await api('/api/decklink')}catch(e){}
+ $('hdmiinfo').innerHTML=HDMI.length?'Ecrane: '+HDMI.map(x=>`${esc(x.connector)} (${esc(x.card)}) <b style="color:${x.status=='connected'?'var(--acc)':'var(--mut)'}">${esc(x.status)}</b>`).join(' · '):'Niciun ecran detectat pe server';
+ $('hdmiinfo').innerHTML+=' · DeckLink: '+(DL.length?DL.length+' placă/plăci':'nedetectat (driver Desktop Video?)')}
 function addOut(t){
  const n=$('f_name').value.trim()||'canal',ta=$('f_out');
  const used=S.channels.length+1;
  const conn=(HDMI.find(x=>x.status=='connected')||{}).connector;
  const v={http:`http://0.0.0.0:8000/${n}`,udp:`udp://239.255.1.${used}:1234?ttl=4`,rtp:`rtp://239.255.1.${used}:1234?ttl=4`,
-  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto'}[t];
+  srt:`srt://0.0.0.0:${6000+used}?mode=listener`,rtmp:`rtmp://localhost/live/${n}`,hdmi:conn?`hdmi://?connector=${conn}`:'hdmi://auto',decklink:'decklink://?device=0&mode=1080i50'}[t];
  ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+v}
 async function saveCh(){
  const b={name:$('f_name').value.trim(),srtla_port:+$('f_port').value,latency:+$('f_lat').value,lossmaxttl:+$('f_ttl').value,outputs:$('f_out').value,enabled:$('f_en').checked};
